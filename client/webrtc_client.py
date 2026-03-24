@@ -34,7 +34,8 @@ class WebRTCClient:
         
         self.channel = self.pc.createDataChannel(CTRL_CHANNEL_NAME)
         self.pc.addTransceiver("video", direction="recvonly")
-        self.input_sender = InputSender(self.display.window_name, self.channel)
+        loop = asyncio.get_running_loop()
+        self.input_sender = InputSender(self.display.window_name, self.channel, loop)
 
         @self.pc.on("track")
         def on_track(track):
@@ -58,8 +59,8 @@ class WebRTCClient:
                 self.input_sender.update_screen_size(width, height)
                 
                 self.display.show_frame(img)
-                key = cv2.waitKeyEx(1)
-                self.input_sender.handle_keyboard(key)
+                # Pump OpenCV GUI events so the window repaints.
+                cv2.waitKey(1)
                 
             except Exception as e:
                 logger.error(f"Video track error: {e}")
@@ -125,6 +126,8 @@ class WebRTCClient:
         try:
             await self.start()
         finally:
+            if self.input_sender:
+                self.input_sender.close()
             if self.pc:
                 await self.pc.close()
             if self.ws:

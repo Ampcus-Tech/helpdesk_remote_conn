@@ -1,12 +1,23 @@
 import cv2
+import logging
+from pynput.keyboard import Listener as KeyboardListener, Key, KeyCode
 from common.messages import ControlMessage, MessageType
 
+logger = logging.getLogger("input_sender")
+
 class InputSender:
-    def __init__(self, window_name, data_channel):
+    def __init__(self, window_name, data_channel, loop):
         self.window_name = window_name
         self.channel = data_channel
+        self.loop = loop
         self.screen_width = 1920
         self.screen_height = 1080
+        self._pressed_keys = set()
+        self._keyboard_listener = KeyboardListener(
+            on_press=self._on_key_press,
+            on_release=self._on_key_release
+        )
+        self._keyboard_listener.start()
         
         cv2.setMouseCallback(self.window_name, self._mouse_callback)
         
@@ -75,29 +86,98 @@ class InputSender:
         if msg:
             self.channel.send(msg.to_json())
 
-    def handle_keyboard(self, key_code):
+    @staticmethod
+    def _normalize_key(key):
+        if isinstance(key, KeyCode):
+            if key.char:
+                char = key.char
+                # When Ctrl is held, platforms may emit control chars (\x01..\x1a)
+                # instead of literal letters. Convert back to a-z for shortcuts.
+                if len(char) == 1 and 1 <= ord(char) <= 26:
+                    return chr(ord(char) + 96)
+                return char.lower()
+            return None
+
+        if isinstance(key, Key):
+            name = str(key).replace("Key.", "")
+            # Normalize common aliases for better cross-platform compatibility.
+            aliases = {
+                "ctrl": "ctrl",
+                "ctrl_l": "ctrl_l",
+                "ctrl_r": "ctrl_r",
+                "alt": "alt",
+                "alt_l": "alt_l",
+                "alt_r": "alt_r",
+                "alt_gr": "alt_gr",
+                "shift": "shift",
+                "shift_l": "shift_l",
+                "shift_r": "shift_r",
+                "cmd": "cmd",
+                "cmd_l": "cmd_l",
+                "cmd_r": "cmd_r",
+                "super": "cmd",
+                "super_l": "cmd_l",
+                "super_r": "cmd_r",
+                "esc": "esc",
+                "space": "space",
+                "tab": "tab",
+                "enter": "enter",
+                "backspace": "backspace",
+                "delete": "delete",
+                "insert": "insert",
+                "home": "home",
+                "end": "end",
+                "page_up": "page_up",
+                "page_down": "page_down",
+                "up": "up",
+                "down": "down",
+                "left": "left",
+                "right": "right",
+            }
+            if name in aliases:
+                return aliases[name]
+
+            # Function keys: f1..f24
+            if name.startswith("f") and name[1:].isdigit():
+                return name
+
+        return None
+
+    def _send_key(self, key_name, pressed):
         if not self.channel or self.channel.readyState != "open":
             return
-        if key_code == -1:
+        msg = ControlMessage(type=MessageType.KEYBOARD, key=key_name, pressed=pressed)
+        self.channel.send(msg.to_json())
+
+    def _send_key_threadsafe(self, key_name, pressed):
+        # Keyboard callbacks come from pynput thread; marshal sends to asyncio loop thread.
+        if not self.loop or self.loop.is_closed():
             return
-            
-        special_keys = {
-            2424832: "left",
-            2490368: "up",
-            2555904: "right",
-            2621440: "down",
-        }
+        self.loop.call_soon_threadsafe(self._send_key, key_name, pressed)
 
+    def _on_key_press(self, key):
         try:
-            key = special_keys.get(key_code)
-            if key is None:
-                key = chr(key_code & 0xFF)
+            key_name = self._normalize_key(key)
+            if not key_name:
+                return
+            if key_name in self._pressed_keys:
+                return
+            self._pressed_keys.add(key_name)
+            self._send_key_threadsafe(key_name, True)
+        except Exception as e:
+            logger.error(f"Keyboard press handling error: {e}")
 
-            msg = ControlMessage(type=MessageType.KEYBOARD, key=key, pressed=True)
-            self.channel.send(msg.to_json())
-            
-            # Simulated key up
-            msg.pressed = False
-            self.channel.send(msg.to_json())
-        except ValueError:
-            pass
+    def _on_key_release(self, key):
+        try:
+            key_name = self._normalize_key(key)
+            if not key_name:
+                return
+            self._pressed_keys.discard(key_name)
+            self._send_key_threadsafe(key_name, False)
+        except Exception as e:
+            logger.error(f"Keyboard release handling error: {e}")
+
+    def close(self):
+        if self._keyboard_listener:
+            self._keyboard_listener.stop()
+            self._keyboard_listener = None
