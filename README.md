@@ -24,6 +24,8 @@ A Python-based remote desktop application using WebRTC (`aiortc`), WebSockets fo
 
 ## Running the Application
 
+./ngrok.exe http 8080
+
 ### 1. Start the Signaling Server
 ```bash
 python signaling/server.py

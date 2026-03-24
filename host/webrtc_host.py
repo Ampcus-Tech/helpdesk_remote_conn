@@ -43,6 +43,8 @@ class WebRTCHost:
                             self.input_receiver.handle_mouse_move(msg)
                         elif msg.type == MessageType.MOUSE_CLICK:
                             self.input_receiver.handle_mouse_click(msg)
+                        elif msg.type == MessageType.MOUSE_DOUBLE_CLICK:
+                            self.input_receiver.handle_mouse_double_click(msg)
                         elif msg.type == MessageType.KEYBOARD:
                             self.input_receiver.handle_keyboard(msg)
                     except Exception as e:

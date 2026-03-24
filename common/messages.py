@@ -13,6 +13,7 @@ class MessageType:
     # Data channel messages
     MOUSE_MOVE = "mouse_move"
     MOUSE_CLICK = "mouse_click"
+    MOUSE_DOUBLE_CLICK = "mouse_double_click"
     KEYBOARD = "keyboard"
     QUALITY_CHANGE = "quality_change"
 

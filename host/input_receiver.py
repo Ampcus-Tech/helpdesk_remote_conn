@@ -35,6 +35,10 @@ class InputReceiver:
             self.mouse.press(btn)
         else:
             self.mouse.release(btn)
+
+    def handle_mouse_double_click(self, msg: ControlMessage):
+        btn = Button.left if msg.button == "left" else Button.right
+        self.mouse.click(btn, 2)
             
     def handle_keyboard(self, msg: ControlMessage):
         key = msg.key

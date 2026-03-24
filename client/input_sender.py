@@ -29,6 +29,10 @@ class InputSender:
             msg = ControlMessage(type=MessageType.MOUSE_CLICK, button="right", pressed=True)
         elif event == cv2.EVENT_RBUTTONUP:
             msg = ControlMessage(type=MessageType.MOUSE_CLICK, button="right", pressed=False)
+        elif event == cv2.EVENT_LBUTTONDBLCLK:
+            msg = ControlMessage(type=MessageType.MOUSE_DOUBLE_CLICK, button="left")
+        elif event == cv2.EVENT_RBUTTONDBLCLK:
+            msg = ControlMessage(type=MessageType.MOUSE_DOUBLE_CLICK, button="right")
             
         if msg:
             self.channel.send(msg.to_json())
