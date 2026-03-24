@@ -14,6 +14,7 @@ class MessageType:
     MOUSE_MOVE = "mouse_move"
     MOUSE_CLICK = "mouse_click"
     MOUSE_DOUBLE_CLICK = "mouse_double_click"
+    MOUSE_SCROLL = "mouse_scroll"
     KEYBOARD = "keyboard"
     QUALITY_CHANGE = "quality_change"
 
@@ -46,6 +47,9 @@ class ControlMessage:
     # Keyboard
     key: Optional[str] = None
     modifiers: Optional[List[str]] = None
+    # Mouse scroll
+    scroll_dx: Optional[int] = None
+    scroll_dy: Optional[int] = None
     # Quality
     quality: Optional[str] = None
 

@@ -39,6 +39,29 @@ class InputReceiver:
     def handle_mouse_double_click(self, msg: ControlMessage):
         btn = Button.left if msg.button == "left" else Button.right
         self.mouse.click(btn, 2)
+
+    def handle_mouse_scroll(self, msg: ControlMessage):
+        # Ensure scroll happens at the same on-screen target as the client pointer.
+        if (
+            msg.x is not None
+            and msg.y is not None
+            and msg.screen_width
+            and msg.screen_height
+        ):
+            hx = int((msg.x / msg.screen_width) * self.screen_width)
+            hy = int((msg.y / msg.screen_height) * self.screen_height)
+            self.mouse.position = (hx, hy)
+
+        dx = msg.scroll_dx or 0
+        dy = msg.scroll_dy or 0
+        if dx == 0 and dy == 0:
+            return
+        # Pynput scroll units are coarse; boost a little for Windows explorer feel.
+        if dx != 0:
+            dx = 2 if dx > 0 else -2
+        if dy != 0:
+            dy = 2 if dy > 0 else -2
+        self.mouse.scroll(dx, dy)
             
     def handle_keyboard(self, msg: ControlMessage):
         key = msg.key

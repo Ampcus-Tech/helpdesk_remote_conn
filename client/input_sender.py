@@ -14,6 +14,16 @@ class InputSender:
         self.screen_width = width
         self.screen_height = height
 
+    @staticmethod
+    def _extract_wheel_delta(flags):
+        # Prefer OpenCV helper when available; fallback to signed high-word parsing.
+        if hasattr(cv2, "getMouseWheelDelta"):
+            return cv2.getMouseWheelDelta(flags)
+        delta = (flags >> 16) & 0xFFFF
+        if delta >= 0x8000:
+            delta -= 0x10000
+        return delta
+
     def _mouse_callback(self, event, x, y, flags, param):
         if not self.channel or self.channel.readyState != "open":
             return
@@ -33,6 +43,34 @@ class InputSender:
             msg = ControlMessage(type=MessageType.MOUSE_DOUBLE_CLICK, button="left")
         elif event == cv2.EVENT_RBUTTONDBLCLK:
             msg = ControlMessage(type=MessageType.MOUSE_DOUBLE_CLICK, button="right")
+        elif event == cv2.EVENT_MOUSEWHEEL:
+            delta = self._extract_wheel_delta(flags)
+            steps = int(delta / 120) if delta else 0
+            if steps == 0 and delta:
+                steps = 1 if delta > 0 else -1
+            msg = ControlMessage(
+                type=MessageType.MOUSE_SCROLL,
+                x=x,
+                y=y,
+                screen_width=self.screen_width,
+                screen_height=self.screen_height,
+                scroll_dx=0,
+                scroll_dy=steps
+            )
+        elif event == cv2.EVENT_MOUSEHWHEEL:
+            delta = self._extract_wheel_delta(flags)
+            steps = int(delta / 120) if delta else 0
+            if steps == 0 and delta:
+                steps = 1 if delta > 0 else -1
+            msg = ControlMessage(
+                type=MessageType.MOUSE_SCROLL,
+                x=x,
+                y=y,
+                screen_width=self.screen_width,
+                screen_height=self.screen_height,
+                scroll_dx=steps,
+                scroll_dy=0
+            )
             
         if msg:
             self.channel.send(msg.to_json())
@@ -43,9 +81,19 @@ class InputSender:
         if key_code == -1:
             return
             
+        special_keys = {
+            2424832: "left",
+            2490368: "up",
+            2555904: "right",
+            2621440: "down",
+        }
+
         try:
-            char = chr(key_code & 0xFF)
-            msg = ControlMessage(type=MessageType.KEYBOARD, key=char, pressed=True)
+            key = special_keys.get(key_code)
+            if key is None:
+                key = chr(key_code & 0xFF)
+
+            msg = ControlMessage(type=MessageType.KEYBOARD, key=key, pressed=True)
             self.channel.send(msg.to_json())
             
             # Simulated key up

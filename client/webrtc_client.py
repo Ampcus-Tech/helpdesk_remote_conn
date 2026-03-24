@@ -58,7 +58,7 @@ class WebRTCClient:
                 self.input_sender.update_screen_size(width, height)
                 
                 self.display.show_frame(img)
-                key = cv2.waitKey(1)
+                key = cv2.waitKeyEx(1)
                 self.input_sender.handle_keyboard(key)
                 
             except Exception as e:
