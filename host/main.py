@@ -6,23 +6,20 @@ import os
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.config import setup_logging
-from host.webrtc_host import WebRTCHost
+from host.gui import HostGUI
 
 def generate_host_id(length=6):
     return ''.join(random.choices(string.digits, k=length))
 
-async def main():
+def main():
     setup_logging()
-    host_id = generate_host_id()
-    print("=========================================")
-    print(f"Host ID to connect: {host_id}")
-    print("=========================================")
     
-    host = WebRTCHost(host_id)
-    await host.run()
+    # Launch GUI
+    app = HostGUI()
+    app.run()
 
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        main()
     except KeyboardInterrupt:
         print("Host terminated by user")
