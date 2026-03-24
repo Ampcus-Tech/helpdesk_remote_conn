@@ -1,0 +1,98 @@
+import json
+import logging
+import os
+
+_log = logging.getLogger(__name__)
+
+# Networking
+# When using Ngrok, keep SIGNALING_HOST as "0.0.0.0"
+SIGNALING_HOST = os.getenv("SIGNALING_HOST", "0.0.0.0")
+SIGNALING_PORT = 8080
+
+# FOR NGROK: Change this to "wss://xxxx.ngrok-free.app"
+# FOR LOCAL: It will automatically use ws://0.0.0.0:8080
+SIGNALING_URL = os.getenv("SIGNALING_URL", "wss://kiera-unsensory-kathrine.ngrok-free.dev")
+
+
+def _metered_turn_urls_udp_first() -> list[str]:
+    """UDP TURN first (lower latency when UDP is allowed)."""
+    return [
+        "turn:global.relay.metered.ca:80",
+        "turn:global.relay.metered.ca:443?transport=tcp",
+        "turns:global.relay.metered.ca:443?transport=tcp",
+    ]
+
+
+def _metered_turn_urls_tcp_first() -> list[str]:
+    """
+    TURNS/TCP first — best default for internet / office firewalls.
+    aiortc only applies the *first* TURN URL it sees (see rtcicetransport.connection_kwargs).
+    """
+    return [
+        "turns:global.relay.metered.ca:443?transport=tcp",
+        "turn:global.relay.metered.ca:443?transport=tcp",
+        "turn:global.relay.metered.ca:80",
+    ]
+
+
+def _default_ice_servers() -> list[dict]:
+    # Metered Open Relay: create your own app at https://www.metered.ca/tools/openrelay/
+    turn_user = os.getenv("TURN_USERNAME", "d398a24c0efc6ba4581dce38")
+    turn_cred = os.getenv("TURN_CREDENTIAL", "QijFwDMhlV3d0uM4")
+    if os.getenv("ICE_UDP_TURN_FIRST", "").lower() in ("1", "true", "yes"):
+        turn_urls = _metered_turn_urls_udp_first()
+    else:
+        turn_urls = _metered_turn_urls_tcp_first()
+    return [
+        {
+            "urls": [
+                "stun:stun.l.google.com:19302",
+                "stun:stun1.l.google.com:19302",
+            ]
+        },
+        {"urls": turn_urls, "username": turn_user, "credential": turn_cred},
+    ]
+
+
+def _load_ice_servers() -> list[dict]:
+    raw = os.getenv("ICE_SERVERS_JSON")
+    if not raw:
+        return _default_ice_servers()
+    try:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, list):
+            raise ValueError("ICE_SERVERS_JSON must be a JSON array of objects")
+        return parsed
+    except (json.JSONDecodeError, ValueError) as e:
+        _log.warning("ICE_SERVERS_JSON invalid (%s); using built-in defaults", e)
+        return _default_ice_servers()
+    
+    
+# STUN / TURN — required for NAT traversal across different networks.
+# Override: ICE_SERVERS_JSON, or TURN_USERNAME + TURN_CREDENTIAL, or ICE_UDP_TURN_FIRST=1.
+ICE_SERVERS = _load_ice_servers()
+
+# Video settings
+TARGET_FPS = 15
+DEFAULT_QUALITY = "high"
+QUALITY_SETTINGS = {
+    "low": {
+        "scale": 0.5,
+        "jpeg_quality": 30,
+    },
+    "medium": {
+        "scale": 0.75,
+        "jpeg_quality": 60,
+    },
+    "high": {
+        "scale": 1.0,
+        "jpeg_quality": 85,
+    }
+}
+
+# Data Channel Names
+CTRL_CHANNEL_NAME = "control"
+
+# Logging Config
+def setup_logging(level=logging.INFO):
+    logging.basicConfig(level=level, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
