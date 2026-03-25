@@ -73,7 +73,7 @@ def _load_ice_servers() -> list[dict]:
 ICE_SERVERS = _load_ice_servers()
 
 # Video settings
-TARGET_FPS = 15
+TARGET_FPS = int(os.getenv("TARGET_FPS", "20"))
 DEFAULT_QUALITY = "high"
 QUALITY_SETTINGS = {
     "low": {
@@ -89,6 +89,13 @@ QUALITY_SETTINGS = {
         "jpeg_quality": 85,
     }
 }
+
+# WebRTC video codec/bitrate tuning.
+# Note: Your current `aiortc` version supports `VP8` and `H264` (not `VP9`).
+VIDEO_CODEC = os.getenv("VIDEO_CODEC", "h264").lower()  # "vp8" or "h264"
+VIDEO_BITRATE = int(os.getenv("VIDEO_BITRATE", "2000000"))  # bits per second
+VIDEO_BITRATE_MIN = int(os.getenv("VIDEO_BITRATE_MIN", "1000000"))
+VIDEO_BITRATE_MAX = int(os.getenv("VIDEO_BITRATE_MAX", "4000000"))
 
 # Data Channel Names
 CTRL_CHANNEL_NAME = "control"

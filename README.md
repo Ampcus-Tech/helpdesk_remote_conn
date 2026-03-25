@@ -49,6 +49,20 @@ When prompted, enter the 6-digit Host ID. Or pass it as an argument:
 python client/main.py 123456
 ```
 
+### (Optional) Start the GUI Applications
+If you want a Host/Client “application-like” UI:
+
+Host PC (shows generated Host ID):
+```bash
+python host/gui_app.py
+```
+
+Client PC (enter Host ID and click Connect):
+```bash
+python client/gui_app.py
+```
+After connecting, an OpenCV video window will appear on the Client side.
+
 ## Running across the Internet (Office Firewall Fix)
 
 If you are on an office network or different networks, use **Ngrok** to bypass the firewall without needing Administrator rights:
@@ -75,4 +89,33 @@ If you are on an office network or different networks, use **Ngrok** to bypass t
 ### 4. Run the Apps
 - **Host PC**: `python host/main.py`
 - **Viewer PC**: `python client/main.py`
+
+## Make it Clearer (Ultraviewer-like Tuning)
+Your current WebRTC pipeline is solid; the biggest quality jump is bitrate + codec choice.
+
+### VP9 note (important)
+With your installed `aiortc` version, `VP9` is not available. The fastest path to “Ultraviewer clarity” in this stack is:
+
+- Prefer `H264` (`VIDEO_CODEC=h264`)
+- Increase `VIDEO_BITRATE`
+- Optionally increase `TARGET_FPS`
+
+### Quick settings to try
+Edit `common/config.py` or set environment variables before starting Host/Client.
+
+- `VIDEO_CODEC`: `vp8` or `h264` (default: `h264`)
+- `VIDEO_BITRATE`: bits/sec (default: `2000000`)
+- `VIDEO_BITRATE_MIN`: encoder floor (default: `1000000`)
+- `VIDEO_BITRATE_MAX`: encoder ceiling (default: `4000000`)
+- `TARGET_FPS`: frame rate (default: `20`)
+- `DEFAULT_QUALITY`: affects capture scaling (`low`=0.5, `medium`=0.75, `high`=1.0)
+
+### Recommended starting point
+If your connection is decent, try:
+
+- `VIDEO_CODEC=h264`
+- `VIDEO_BITRATE=3000000`
+- `TARGET_FPS=20`
+
+Then restart both apps and evaluate sharpness/latency.
 
