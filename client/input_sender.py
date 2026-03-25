@@ -2,6 +2,7 @@ import cv2
 import logging
 import ctypes
 from pynput.keyboard import Listener as KeyboardListener, Key, KeyCode
+from pynput.mouse import Listener as MouseListener, Button as MouseButton
 from common.messages import ControlMessage, MessageType
 
 logger = logging.getLogger("input_sender")
@@ -14,7 +15,10 @@ class InputSender:
         self.screen_width = 1920
         self.screen_height = 1080
         self._pressed_keys = set()
+        self._pressed_mouse_buttons = set()
         self._enable_focus_gating = True
+        self._mouse_listener = MouseListener(on_click=self._on_mouse_click)
+        self._mouse_listener.start()
         self._keyboard_listener = KeyboardListener(
             on_press=self._on_key_press,
             on_release=self._on_key_release
@@ -74,23 +78,51 @@ class InputSender:
     def _mouse_callback(self, event, x, y, flags, param):
         if not self.channel or self.channel.readyState != "open":
             return
+
+        is_foreground = True
+        if self._enable_focus_gating:
+            is_foreground = self._is_target_window_foreground()
             
         msg = None
         if event == cv2.EVENT_MOUSEMOVE:
+            if self._enable_focus_gating and not is_foreground:
+                return
             msg = ControlMessage(type=MessageType.MOUSE_MOVE, x=x, y=y, screen_width=self.screen_width, screen_height=self.screen_height)
         elif event == cv2.EVENT_LBUTTONDOWN:
+            if self._enable_focus_gating and not is_foreground:
+                return
+            self._pressed_mouse_buttons.add("left")
             msg = ControlMessage(type=MessageType.MOUSE_CLICK, button="left", pressed=True)
         elif event == cv2.EVENT_LBUTTONUP:
+            if self._enable_focus_gating and not is_foreground and "left" not in self._pressed_mouse_buttons:
+                return
+            if "left" not in self._pressed_mouse_buttons:
+                return
+            self._pressed_mouse_buttons.discard("left")
             msg = ControlMessage(type=MessageType.MOUSE_CLICK, button="left", pressed=False)
         elif event == cv2.EVENT_RBUTTONDOWN:
+            if self._enable_focus_gating and not is_foreground:
+                return
+            self._pressed_mouse_buttons.add("right")
             msg = ControlMessage(type=MessageType.MOUSE_CLICK, button="right", pressed=True)
         elif event == cv2.EVENT_RBUTTONUP:
+            if self._enable_focus_gating and not is_foreground and "right" not in self._pressed_mouse_buttons:
+                return
+            if "right" not in self._pressed_mouse_buttons:
+                return
+            self._pressed_mouse_buttons.discard("right")
             msg = ControlMessage(type=MessageType.MOUSE_CLICK, button="right", pressed=False)
         elif event == cv2.EVENT_LBUTTONDBLCLK:
+            if self._enable_focus_gating and not is_foreground:
+                return
             msg = ControlMessage(type=MessageType.MOUSE_DOUBLE_CLICK, button="left")
         elif event == cv2.EVENT_RBUTTONDBLCLK:
+            if self._enable_focus_gating and not is_foreground:
+                return
             msg = ControlMessage(type=MessageType.MOUSE_DOUBLE_CLICK, button="right")
         elif event == cv2.EVENT_MOUSEWHEEL:
+            if self._enable_focus_gating and not is_foreground:
+                return
             delta = self._extract_wheel_delta(flags)
             steps = int(delta / 120) if delta else 0
             if steps == 0 and delta:
@@ -105,6 +137,8 @@ class InputSender:
                 scroll_dy=steps
             )
         elif event == cv2.EVENT_MOUSEHWHEEL:
+            if self._enable_focus_gating and not is_foreground:
+                return
             delta = self._extract_wheel_delta(flags)
             steps = int(delta / 120) if delta else 0
             if steps == 0 and delta:
@@ -191,6 +225,51 @@ class InputSender:
             return
         self.loop.call_soon_threadsafe(self._send_key, key_name, pressed)
 
+    def _send_mouse_click(self, button_name: str, pressed: bool) -> None:
+        if not self.channel or self.channel.readyState != "open":
+            return
+        msg = ControlMessage(type=MessageType.MOUSE_CLICK, button=button_name, pressed=pressed)
+        self.channel.send(msg.to_json())
+
+    def _send_mouse_click_threadsafe(self, button_name: str, pressed: bool) -> None:
+        # Mouse callbacks come from pynput thread; marshal sends to asyncio loop thread.
+        if not self.loop or self.loop.is_closed():
+            return
+        self.loop.call_soon_threadsafe(self._send_mouse_click, button_name, pressed)
+
+    def _on_mouse_click(self, x, y, button, pressed):
+        """
+        Only used to prevent "stuck" mouse buttons if the release happens outside the
+        OpenCV window (so cv2's mouse callback won't fire).
+
+        We forward releases only for buttons we've already sent to the host.
+        """
+        try:
+            if not self.channel or self.channel.readyState != "open":
+                return
+
+            button_name = None
+            if button == MouseButton.left:
+                button_name = "left"
+            elif button == MouseButton.right:
+                button_name = "right"
+
+            if button_name is None:
+                return
+
+            if pressed:
+                # Mouse presses are handled by OpenCV mouse callback (keeps coordinates consistent).
+                return
+
+            if button_name not in self._pressed_mouse_buttons:
+                return
+
+            # Ensure the pressed set is cleared immediately; the OpenCV callback may never fire.
+            self._pressed_mouse_buttons.discard(button_name)
+            self._send_mouse_click_threadsafe(button_name, False)
+        except Exception as e:
+            logger.error(f"Mouse click handling error: {e}")
+
     def _on_key_press(self, key):
         try:
             if self._enable_focus_gating and not self._is_target_window_foreground():
@@ -223,3 +302,6 @@ class InputSender:
         if self._keyboard_listener:
             self._keyboard_listener.stop()
             self._keyboard_listener = None
+        if self._mouse_listener:
+            self._mouse_listener.stop()
+            self._mouse_listener = None
