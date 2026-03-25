@@ -1,5 +1,6 @@
 import cv2
 import logging
+import ctypes
 from pynput.keyboard import Listener as KeyboardListener, Key, KeyCode
 from common.messages import ControlMessage, MessageType
 
@@ -13,6 +14,7 @@ class InputSender:
         self.screen_width = 1920
         self.screen_height = 1080
         self._pressed_keys = set()
+        self._enable_focus_gating = True
         self._keyboard_listener = KeyboardListener(
             on_press=self._on_key_press,
             on_release=self._on_key_release
@@ -24,6 +26,40 @@ class InputSender:
     def update_screen_size(self, width, height):
         self.screen_width = width
         self.screen_height = height
+
+    def _is_target_window_foreground(self) -> bool:
+        """
+        On Wi only forward keyboard input when the Ondows,penCV "Remote Desktop"
+        window is the foreground window. This prevents keystrokes typed into the
+        client's own applications (e.g., browser search) from reaching the host.
+        """
+        try:
+            if self.window_name is None:
+                return False
+
+            # Best-effort: if anything fails, block input to avoid leaking keystrokes.
+            if not hasattr(ctypes, "windll"):
+                return False
+
+            user32 = ctypes.windll.user32
+            hwnd = user32.GetForegroundWindow()
+            if not hwnd:
+                return False
+
+            length = user32.GetWindowTextLengthW(hwnd)
+            title_buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, title_buf, length + 1)
+
+            title = (title_buf.value or "").strip()
+            expected = str(self.window_name).strip()
+
+            if not expected:
+                return False
+
+            # OpenCV uses the provided window name as the title.
+            return expected in title
+        except Exception:
+            return False
 
     @staticmethod
     def _extract_wheel_delta(flags):
@@ -157,6 +193,8 @@ class InputSender:
 
     def _on_key_press(self, key):
         try:
+            if self._enable_focus_gating and not self._is_target_window_foreground():
+                return
             key_name = self._normalize_key(key)
             if not key_name:
                 return
@@ -171,6 +209,10 @@ class InputSender:
         try:
             key_name = self._normalize_key(key)
             if not key_name:
+                return
+            # If we didn't forward this key-press to the host, ignore the release too.
+            # This keeps the host's modifier/keypress state from getting corrupted.
+            if key_name not in self._pressed_keys:
                 return
             self._pressed_keys.discard(key_name)
             self._send_key_threadsafe(key_name, False)
