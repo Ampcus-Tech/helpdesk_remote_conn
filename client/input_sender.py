@@ -2,6 +2,8 @@ import cv2
 import logging
 import ctypes
 import json
+import threading
+import time
 from pynput.keyboard import Listener as KeyboardListener, Key, KeyCode
 from pynput.mouse import Listener as MouseListener, Button as MouseButton
 from common.messages import ControlMessage, MessageType
@@ -38,11 +40,15 @@ class InputSender:
 
         self._mouse_listener = MouseListener(on_click=self._on_mouse_click)
         self._mouse_listener.start()
-        self._keyboard_listener = KeyboardListener(
-            on_press=self._on_key_press,
-            on_release=self._on_key_release
-        )
-        self._keyboard_listener.start()
+        self._keyboard_listener = None
+        self._keyboard_listener_suppressed = False
+
+        # Start/stop the keyboard hook based on focus.
+        # On Windows we can suppress local key delivery (so Win+R doesn't open locally).
+        # When the remote window is not active/minimized, we stop the hook so the client PC works normally.
+        self._focus_thread_stop = threading.Event()
+        self._focus_thread = threading.Thread(target=self._focus_monitor_loop, daemon=True)
+        self._focus_thread.start()
         
         cv2.setMouseCallback(self.window_name, self._mouse_callback)
         
@@ -60,13 +66,26 @@ class InputSender:
             if self.window_name is None:
                 return False
 
-            # Best-effort: if anything fails, block input to avoid leaking keystrokes.
+            # Best-effort focus gating:
+            # - Windows: check real foreground window + minimized state.
+            # - macOS/Linux: fall back to OpenCV window visibility (best-effort).
             if not hasattr(ctypes, "windll"):
-                return False
+                try:
+                    visible = cv2.getWindowProperty(self.window_name, cv2.WND_PROP_VISIBLE)
+                    return visible > 0
+                except Exception:
+                    # If we cannot determine visibility, block forwarding to avoid leaking.
+                    return False
 
             user32 = ctypes.windll.user32
             hwnd = user32.GetForegroundWindow()
             if not hwnd:
+                return False
+            # If the remote desktop window is minimized, stop forwarding keystrokes
+            # so the local client app behaves normally.
+            if hasattr(user32, "IsIconic") and user32.IsIconic(hwnd):
+                return False
+            if hasattr(user32, "IsWindowVisible") and not user32.IsWindowVisible(hwnd):
                 return False
 
             length = user32.GetWindowTextLengthW(hwnd)
@@ -225,6 +244,13 @@ class InputSender:
                 "down": "down",
                 "left": "left",
                 "right": "right",
+                # Windows system keys / locks / screenshot
+                "caps_lock": "caps_lock",
+                "num_lock": "num_lock",
+                "scroll_lock": "scroll_lock",
+                "pause": "pause",
+                "print_screen": "print_screen",
+                "menu": "menu",
             }
             if name in aliases:
                 return aliases[name]
@@ -246,6 +272,85 @@ class InputSender:
         if not self.loop or self.loop.is_closed():
             return
         self.loop.call_soon_threadsafe(self._send_key, key_name, pressed)
+
+    def _release_all_pressed_keys_threadsafe(self) -> None:
+        """Best-effort: prevent stuck modifiers on the host when focus changes."""
+        try:
+            if not self._pressed_keys:
+                return
+            # Copy before clearing to avoid mutation during iteration.
+            keys = list(self._pressed_keys)
+            self._pressed_keys.clear()
+            for k in keys:
+                self._send_key_threadsafe(k, False)
+        except Exception:
+            pass
+
+    def _ensure_keyboard_listener(self, should_run: bool) -> None:
+        """
+        Start/stop the global keyboard listener depending on whether the remote window
+        is active. On Windows, we run with suppress=True so client shortcuts don't fire locally.
+        """
+        try:
+            if should_run:
+                if self._keyboard_listener:
+                    return
+                suppress = bool(hasattr(ctypes, "windll"))
+                self._keyboard_listener_suppressed = suppress
+                self._keyboard_listener = KeyboardListener(
+                    on_press=self._on_key_press,
+                    on_release=self._on_key_release,
+                    suppress=suppress,
+                )
+                self._keyboard_listener.start()
+            else:
+                if not self._keyboard_listener:
+                    return
+                # Release anything we may have sent to the host.
+                self._release_all_pressed_keys_threadsafe()
+                try:
+                    self._keyboard_listener.stop()
+                finally:
+                    self._keyboard_listener = None
+                    self._keyboard_listener_suppressed = False
+        except TypeError:
+            # Some platforms/builds may not support suppress=.
+            if should_run and not self._keyboard_listener:
+                self._keyboard_listener = KeyboardListener(
+                    on_press=self._on_key_press,
+                    on_release=self._on_key_release,
+                )
+                self._keyboard_listener.start()
+            elif not should_run and self._keyboard_listener:
+                self._release_all_pressed_keys_threadsafe()
+                try:
+                    self._keyboard_listener.stop()
+                finally:
+                    self._keyboard_listener = None
+                    self._keyboard_listener_suppressed = False
+        except Exception:
+            # Never crash the client due to keyboard hook issues.
+            pass
+
+    def _focus_monitor_loop(self) -> None:
+        """
+        Poll focus/visibility and only keep the keyboard hook active when the
+        remote window is actually active. This is what prevents Win+R/etc from
+        triggering on the client PC while controlling the host.
+        """
+        last_should_run = None
+        while not self._focus_thread_stop.is_set():
+            try:
+                should_run = True
+                if self._enable_focus_gating:
+                    should_run = self._is_target_window_foreground()
+
+                if should_run != last_should_run:
+                    self._ensure_keyboard_listener(should_run)
+                    last_should_run = should_run
+            except Exception:
+                pass
+            time.sleep(0.05)
 
     def _send_mouse_click(self, button_name: str, pressed: bool) -> None:
         if not self.channel or self.channel.readyState != "open":
@@ -294,8 +399,7 @@ class InputSender:
 
     def _on_key_press(self, key):
         try:
-            if self._enable_focus_gating and not self._is_target_window_foreground():
-                return
+            # Focus is handled by the focus monitor starting/stopping the listener.
             key_name = self._normalize_key(key)
             if not key_name:
                 return
@@ -342,6 +446,15 @@ class InputSender:
             pass
 
     def close(self):
+        if self._focus_thread_stop:
+            self._focus_thread_stop.set()
+            self._focus_thread_stop = None
+        if self._focus_thread:
+            try:
+                self._focus_thread.join(timeout=0.5)
+            except Exception:
+                pass
+            self._focus_thread = None
         if self._keyboard_listener:
             self._keyboard_listener.stop()
             self._keyboard_listener = None
