@@ -171,6 +171,7 @@ class WebRTCHost:
 
         try:
             while channel.readyState == "open":
+                info.cbSize = ctypes.sizeof(CURSORINFO) # Reset every time for safety
                 if user32.GetCursorInfo(ctypes.byref(info)):
                     # Map the current handle to our standardized cursor names
                     cname = self._cursor_handles.get(info.hCursor, "arrow")

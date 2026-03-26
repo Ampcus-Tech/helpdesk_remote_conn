@@ -34,7 +34,7 @@ class InputSender:
                     if data.get("type") == MessageType.CURSOR_UPDATE:
                         cname = data.get("cursor_name")
                         if cname:
-                            self._update_local_cursor(cname)
+                            self.loop.call_soon_threadsafe(self._update_local_cursor, cname)
                 except Exception:
                     pass
 
@@ -52,6 +52,30 @@ class InputSender:
         
         cv2.setMouseCallback(self.window_name, self._mouse_callback)
         
+        # Windows-specific: Force the window class cursor to an arrow. 
+        # OpenCV windows often default to an I-beam on Windows if not explicitly overridden.
+        if hasattr(ctypes, "windll"):
+            threading.Thread(target=self._force_arrow_cursor_delayed, daemon=True).start()
+
+    def _force_arrow_cursor_delayed(self):
+        """Find the window and override its class cursor to prevent it defaulting to I-beam."""
+        # Wait a bit for the window to actually be created by OpenCV.
+        for _ in range(10): 
+            try:
+                hwnd = ctypes.windll.user32.FindWindowW(None, self.window_name)
+                if hwnd:
+                    # GCLP_HCURSOR = -12
+                    h_arrow = ctypes.windll.user32.LoadCursorW(0, 32512)
+                    # Set the class cursor once. This usually stops the I-beam default.
+                    if hasattr(ctypes.windll.user32, "SetClassLongPtrW"):
+                        ctypes.windll.user32.SetClassLongPtrW(hwnd, -12, h_arrow)
+                    else:
+                        ctypes.windll.user32.SetClassLongW(hwnd, -12, h_arrow)
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5)
+
     def update_screen_size(self, width, height):
         self.screen_width = width
         self.screen_height = height
