@@ -17,6 +17,24 @@ class InputSender:
         self._pressed_keys = set()
         self._pressed_mouse_buttons = set()
         self._enable_focus_gating = True
+  
+        # Cross-platform cursor handling: current handle and mapping.
+        self._h_cursor_current = None
+        if hasattr(ctypes, "windll"):
+            self._h_cursor_current = ctypes.windll.user32.LoadCursorW(0, 32512)  # Default arrow
+
+        if self.channel:
+            @self.channel.on("message")
+            def on_message(message):
+                try:
+                    data = json.loads(message)
+                    if data.get("type") == MessageType.CURSOR_UPDATE:
+                        cname = data.get("cursor_name")
+                        if cname:
+                            self._update_local_cursor(cname)
+                except Exception:
+                    pass
+
         self._mouse_listener = MouseListener(on_click=self._on_mouse_click)
         self._mouse_listener.start()
         self._keyboard_listener = KeyboardListener(
@@ -33,7 +51,7 @@ class InputSender:
 
     def _is_target_window_foreground(self) -> bool:
         """
-        On Wi only forward keyboard input when the Ondows,penCV "Remote Desktop"
+        On Windows, only forward keyboard input when the OpenCV "Remote Desktop"
         window is the foreground window. This prevents keystrokes typed into the
         client's own applications (e.g., browser search) from reaching the host.
         """
@@ -79,6 +97,9 @@ class InputSender:
         if not self.channel or self.channel.readyState != "open":
             return
 
+        # Synchronize local cursor with the remote host's current shape.
+        if self._h_cursor_current:
+            ctypes.windll.user32.SetCursor(self._h_cursor_current)
         is_foreground = True
         if self._enable_focus_gating:
             is_foreground = self._is_target_window_foreground()
@@ -282,8 +303,7 @@ class InputSender:
             self._pressed_keys.add(key_name)
             self._send_key_threadsafe(key_name, True)
         except Exception as e:
-            logger.error(f"Keyboard press handling error: {e}")
-
+            logger.error(f"Keyboard press handling error: {e}") 
     def _on_key_release(self, key):
         try:
             key_name = self._normalize_key(key)
@@ -297,6 +317,28 @@ class InputSender:
             self._send_key_threadsafe(key_name, False)
         except Exception as e:
             logger.error(f"Keyboard release handling error: {e}")
+
+    def _update_local_cursor(self, cursor_name: str):
+        """Map standardized names to platform-specific cursor IDs and apply them."""
+        if not hasattr(ctypes, "windll"):
+            return # Placeholder for Mac/Linux client cursor setting logic
+
+        # Mapping names to Windows IDC constants.
+        mapping = {
+            "arrow": 32512, "ibeam": 32513, "wait": 32514, "crosshair": 32515,
+            "hand": 32649, "size_all": 32646, "size_we": 32644, "size_ns": 32645,
+            "size_nwse": 32642, "size_nesw": 32643, "uparrow": 32516,
+            "no": 32648, "appstarting": 32650, "help": 32651
+        }
+        
+        try:
+            idc = mapping.get(cursor_name, 32512)
+            h = ctypes.windll.user32.LoadCursorW(0, idc)
+            if h:
+                self._h_cursor_current = h
+                ctypes.windll.user32.SetCursor(h)
+        except Exception:
+            pass
 
     def close(self):
         if self._keyboard_listener:

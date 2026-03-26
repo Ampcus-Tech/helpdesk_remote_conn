@@ -4,6 +4,11 @@ import logging
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
 from aiortc import RTCRtpSender
 import websockets
+try:
+    import ctypes
+    from ctypes import wintypes
+except ImportError:
+    ctypes = None
 
 import sys
 import os
@@ -21,6 +26,34 @@ from common.config import (
 from host.screen_capture import ScreenCaptureTrack
 from host.input_receiver import InputReceiver
 
+# Standardized cursor names used across all platforms
+# To support Mac/Linux, add their specific detection logic and map to these names.
+WIN_CURSOR_NAME_MAP = {
+    32512: "arrow",
+    32513: "ibeam",
+    32514: "wait",
+    32515: "crosshair",
+    32516: "uparrow",
+    32642: "size_nwse",
+    32643: "size_nesw",
+    32644: "size_we",
+    32645: "size_ns",
+    32646: "size_all",
+    32648: "no",
+    32649: "hand",
+    32650: "appstarting",
+    32651: "help",
+}
+
+if ctypes:
+    class CURSORINFO(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("flags", wintypes.DWORD),
+            ("hCursor", wintypes.HANDLE),
+            ("ptScreenPos", wintypes.POINT),
+        ]
+
 logger = logging.getLogger("webrtc_host")
 
 class WebRTCHost:
@@ -30,6 +63,16 @@ class WebRTCHost:
         self.ws = None
         self.input_receiver = InputReceiver()
         self.on_event = on_event
+        
+        # Cursor tracking state (Cross-platform ready)
+        self._cursor_handles = {}
+        if ctypes and hasattr(ctypes, "windll"):
+            for cid in WIN_CURSOR_NAME_MAP.keys():
+                h = ctypes.windll.user32.LoadCursorW(0, cid)
+                if h:
+                    self._cursor_handles[h] = WIN_CURSOR_NAME_MAP[cid]
+        self._last_cursor_name = None
+        self._cursor_task = None
 
     def _emit(self, message: str) -> None:
         """Send lightweight status updates to the UI (if provided)."""
@@ -88,6 +131,11 @@ class WebRTCHost:
         def on_datachannel(channel):
             logger.info(f"Data channel {channel.label} received")
             if channel.label == CTRL_CHANNEL_NAME:
+                # Start tracking host cursor shape to sync with client
+                if self._cursor_task and not self._cursor_task.done():
+                    self._cursor_task.cancel()
+                self._cursor_task = asyncio.create_task(self._cursor_tracking_loop(channel))
+
                 @channel.on("message")
                 def on_message(message):
                     try:
@@ -110,6 +158,31 @@ class WebRTCHost:
             logger.info(f"ICE connection state is {self.pc.iceConnectionState}")
             if self.pc.iceConnectionState == "failed":
                 await self.pc.close()
+
+    async def _cursor_tracking_loop(self, channel):
+        """Periodically check the host's move cursor shape and sync it to the client."""
+        if not ctypes or not hasattr(ctypes, "windll"):
+            # Placeholder for macOS/Linux detection logic
+            return
+
+        info = CURSORINFO()
+        info.cbSize = ctypes.sizeof(CURSORINFO)
+        user32 = ctypes.windll.user32
+
+        try:
+            while channel.readyState == "open":
+                if user32.GetCursorInfo(ctypes.byref(info)):
+                    # Map the current handle to our standardized cursor names
+                    cname = self._cursor_handles.get(info.hCursor, "arrow")
+                    if cname != self._last_cursor_name:
+                        self._last_cursor_name = cname
+                        msg = ControlMessage(type=MessageType.CURSOR_UPDATE, cursor_name=cname)
+                        channel.send(msg.to_json())
+                await asyncio.sleep(0.1) # 10Hz sync rate
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Cursor tracking error: {e}")
 
     async def connect_signaling(self):
         logger.info(f"Connecting to signaling server at {SIGNALING_URL}")
