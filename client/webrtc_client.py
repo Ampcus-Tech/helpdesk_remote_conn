@@ -130,6 +130,12 @@ class WebRTCClient:
                     self.connected_event.set()
                     break
                     
+                elif msg_type == MessageType.HOST_FOUND:
+                    host_os = data.get("host_os")
+                    logger.info(f"Host found! Host OS: {host_os}")
+                    if self.input_sender:
+                        self.input_sender.set_host_os(host_os)
+
                 elif msg_type == MessageType.SDP:
                     logger.info("Received SDP answer")
                     self._emit("SDP answer received. Waiting for video...")

@@ -65,14 +65,32 @@ class InputReceiver:
             
     def handle_keyboard(self, msg: ControlMessage):
         key = msg.key
+        if not key:
+            return
+            
         try:
-            # simple mapping
+            # Map normalized names back to pynput Key objects or characters.
+            k = None
             if hasattr(Key, key):
                 k = getattr(Key, key)
             elif len(key) == 1:
                 k = key
             else:
-                return # unknown
+                # Fallback for common variations
+                mapping = {
+                    "win": Key.cmd,
+                    "command": Key.cmd,
+                    "control": Key.ctrl,
+                    "option": Key.alt,
+                    "escape": Key.esc,
+                    "return": Key.enter,
+                    "back": Key.backspace,
+                }
+                k = mapping.get(key.lower())
+                
+            if k is None:
+                logger.warning(f"Unknown key received: {key}")
+                return
                 
             if msg.pressed:
                 self.keyboard.press(k)

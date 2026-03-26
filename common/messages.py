@@ -6,6 +6,7 @@ class MessageType:
     REGISTER_HOST = "register_host"
     FIND_HOST = "find_host"
     HOST_REGISTERED = "host_registered"
+    HOST_FOUND = "host_found"
     HOST_NOT_FOUND = "host_not_found"
     SDP = "sdp"
     ICE = "ice"
@@ -23,6 +24,7 @@ class MessageType:
 class SignalingMessage:
     type: str
     host_id: Optional[str] = None
+    host_os: Optional[str] = None
     sdp: Optional[Dict[str, Any]] = None
     candidate: Optional[Dict[str, Any]] = None
     

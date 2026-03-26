@@ -200,7 +200,7 @@ class WebRTCHost:
             print("!"*60 + "\n")
             raise
         
-        reg_msg = SignalingMessage(type=MessageType.REGISTER_HOST, host_id=self.host_id)
+        reg_msg = SignalingMessage(type=MessageType.REGISTER_HOST, host_id=self.host_id, host_os=sys.platform)
         await self.ws.send(reg_msg.to_json())
 
         async for message in self.ws:

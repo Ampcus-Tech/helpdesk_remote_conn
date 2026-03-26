@@ -18,10 +18,12 @@ hosts = {}
 # Maintain a dictionary mapping clients to their connected host_id
 # so we can route client messages back to the correct host.
 clients_to_hosts = {}
+host_os_map = {}  # { host_id: "win32" / "darwin" / "linux" }
 
-async def register_host(websocket: WebSocketServerProtocol, host_id: str):
-    logger.info(f"Registering host {host_id}")
+async def register_host(websocket: WebSocketServerProtocol, host_id: str, host_os: str = None):
+    logger.info(f"Registering host {host_id} (OS: {host_os})")
     hosts[host_id] = websocket
+    host_os_map[host_id] = host_os
     response = SignalingMessage(type=MessageType.HOST_REGISTERED, host_id=host_id)
     await websocket.send(response.to_json())
 
@@ -29,9 +31,10 @@ async def find_host(websocket: WebSocketServerProtocol, host_id: str):
     logger.info(f"Client searching for host {host_id}")
     if host_id in hosts:
         clients_to_hosts[websocket] = host_id
-        # Let host know a client wants to connect via an offer they will send
-        # In WebRTC, typically the caller (Client in this case) sends the first SDP offer
-        # We don't necessarily send a message yet, just route future messages.
+        # Let client know host was found and provide metadata (like OS)
+        host_os = host_os_map.get(host_id)
+        response = SignalingMessage(type=MessageType.HOST_FOUND, host_id=host_id, host_os=host_os)
+        await websocket.send(response.to_json())
     else:
         logger.warning(f"Host {host_id} not found")
         response = SignalingMessage(type=MessageType.HOST_NOT_FOUND, host_id=host_id)
@@ -71,7 +74,8 @@ async def handle_connection(websocket: WebSocketServerProtocol):
             
             if msg_type == MessageType.REGISTER_HOST:
                 host_id = data.get("host_id")
-                await register_host(websocket, host_id)
+                host_os = data.get("host_os")
+                await register_host(websocket, host_id, host_os)
                 is_host = True
                 connected_host_id = host_id
                 
@@ -111,6 +115,8 @@ async def handle_connection(websocket: WebSocketServerProtocol):
     finally:
         if is_host and connected_host_id in hosts:
             del hosts[connected_host_id]
+            if connected_host_id in host_os_map:
+                del host_os_map[connected_host_id]
             logger.info(f"Unregistered host {connected_host_id}")
         if websocket in clients_to_hosts:
             del clients_to_hosts[websocket]

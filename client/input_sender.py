@@ -1,6 +1,8 @@
 import cv2
+import json
 import logging
 import ctypes
+import sys
 from pynput.keyboard import Listener as KeyboardListener, Key, KeyCode
 from pynput.mouse import Listener as MouseListener, Button as MouseButton
 from common.messages import ControlMessage, MessageType
@@ -17,6 +19,11 @@ class InputSender:
         self._pressed_keys = set()
         self._pressed_mouse_buttons = set()
         self._enable_focus_gating = True
+        
+        # Cross-platform shortcut handling: Detect if we are on Mac to map Cmd to Ctrl for shortcuts.
+        self._is_mac = sys.platform == "darwin"
+        self._remap_shortcuts = True  # Enable for intuitive cross-platform experience.
+        self._host_os = "win32" if self._is_mac else None  # Default assumption
   
         # Cross-platform cursor handling: current handle and mapping.
         self._h_cursor_current = None
@@ -37,14 +44,27 @@ class InputSender:
 
         self._mouse_listener = MouseListener(on_click=self._on_mouse_click)
         self._mouse_listener.start()
+        
+        # On Windows, we use a win32_event_filter to selectively swallow system shortcuts
+        # like Win+R locally when the remote window is focused.
+        filter_params = {}
+        if not self._is_mac and hasattr(ctypes, "windll"):
+            filter_params["win32_event_filter"] = self._win32_event_filter
+
         self._keyboard_listener = KeyboardListener(
             on_press=self._on_key_press,
-            on_release=self._on_key_release
+            on_release=self._on_key_release,
+            **filter_params
         )
         self._keyboard_listener.start()
         
         cv2.setMouseCallback(self.window_name, self._mouse_callback)
         
+    def set_host_os(self, host_os: str):
+        """Configure remapping logic based on the host operating system."""
+        self._host_os = host_os.lower()
+        logger.info(f"InputSender host OS set to: {self._host_os}")
+
     def update_screen_size(self, width, height):
         self.screen_width = width
         self.screen_height = height
@@ -59,9 +79,10 @@ class InputSender:
             if self.window_name is None:
                 return False
 
-            # Best-effort: if anything fails, block input to avoid leaking keystrokes.
+            # For non-Windows platforms, we skip focus gating for now as standard OpenCV/ctypes
+            # don't provide a trivial cross-platform way to check window focus.
             if not hasattr(ctypes, "windll"):
-                return False
+                return True
 
             user32 = ctypes.windll.user32
             hwnd = user32.GetForegroundWindow()
@@ -177,8 +198,7 @@ class InputSender:
         if msg:
             self.channel.send(msg.to_json())
 
-    @staticmethod
-    def _normalize_key(key):
+    def _normalize_key(self, key):
         if isinstance(key, KeyCode):
             if key.char:
                 char = key.char
@@ -191,7 +211,8 @@ class InputSender:
 
         if isinstance(key, Key):
             name = str(key).replace("Key.", "")
-            # Normalize common aliases for better cross-platform compatibility.
+            
+            # Normalize common aliases and platform-specific names.
             aliases = {
                 "ctrl": "ctrl",
                 "ctrl_l": "ctrl_l",
@@ -224,9 +245,37 @@ class InputSender:
                 "down": "down",
                 "left": "left",
                 "right": "right",
+                "caps_lock": "caps_lock",
+                "print_screen": "print_screen",
+                "scroll_lock": "scroll_lock",
+                "pause": "pause",
+                "num_lock": "num_lock",
             }
+            
             if name in aliases:
-                return aliases[name]
+                normalized = aliases[name]
+                
+                # Cross-platform shortcut remapping
+                if self._remap_shortcuts and self._host_os:
+                    # Case 1: Mac Client controlling a Windows/Linux host
+                    # Map Cmd (Mac) to Ctrl (Host) for standard shortcuts.
+                    # Map Ctrl (Mac) to Win (Host Host) for system shortcuts.
+                    if self._is_mac and ("win" in self._host_os or "linux" in self._host_os):
+                        if normalized.startswith("cmd"):
+                            return normalized.replace("cmd", "ctrl")
+                        if normalized.startswith("ctrl"):
+                            return normalized.replace("ctrl", "cmd")
+                    
+                    # Case 2: Windows Client controlling a Mac host
+                    # Map Ctrl (Win) to Cmd (Mac) for standard shortcuts.
+                    # Map Win (Win) to Ctrl (Mac) for system shortcuts.
+                    elif not self._is_mac and "darwin" in self._host_os:
+                        if normalized.startswith("ctrl"):
+                            return normalized.replace("ctrl", "cmd")
+                        if normalized.startswith("cmd"):
+                            return normalized.replace("cmd", "ctrl")
+                
+                return normalized
 
             # Function keys: f1..f24
             if name.startswith("f") and name[1:].isdigit():
@@ -317,6 +366,31 @@ class InputSender:
             self._send_key_threadsafe(key_name, False)
         except Exception as e:
             logger.error(f"Keyboard release handling error: {e}")
+
+    def _win32_event_filter(self, msg, data):
+        """
+        Windows-only callback to selectively swallow system shortcuts locally 
+        while sending them to the remote machine.
+        """
+        try:
+            # 1. Check if our window is focused.
+            if not self._is_target_window_foreground():
+                return True # Pass to local OS
+                
+            # 2. Check for system keys that cause local/remote conflicts.
+            # vkCode for LWIN/RWIN (Windows Logo Key)
+            vk = data.vkCode
+            
+            # Suppressing Win key (0x5B, 0x5C) prevents local Start menu/Run dialog
+            # while allowing the pynput listener to still send them to the remote host.
+            if vk in [0x5B, 0x5C]:
+                return False # Swallows the event locally
+                
+            # Note: We keep Alt+Tab (0x09) as True locally by default so users 
+            # don't get 'trapped' in the window, but Win+R is now exclusive to remote.
+            return True 
+        except Exception:
+            return True
 
     def _update_local_cursor(self, cursor_name: str):
         """Map standardized names to platform-specific cursor IDs and apply them."""
