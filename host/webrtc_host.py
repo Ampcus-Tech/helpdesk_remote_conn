@@ -4,9 +4,13 @@ import logging
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
 from aiortc import RTCRtpSender
 import websockets
+import platform
 try:
-    import ctypes
-    from ctypes import wintypes
+    if platform.system() == "Windows":
+        import ctypes
+        from ctypes import wintypes
+    else:
+        ctypes = None
 except ImportError:
     ctypes = None
 
@@ -45,6 +49,19 @@ WIN_CURSOR_NAME_MAP = {
     32651: "help",
 }
 
+# Mac system cursor to standardized names
+MAC_CURSOR_MAP = {
+    "arrowCursor": "arrow",
+    "IBeamCursor": "ibeam",
+    "pointingHandCursor": "hand",
+    "closedHandCursor": "size_all",
+    "openHandCursor": "size_all",
+    "resizeLeftRightCursor": "size_we",
+    "resizeUpDownCursor": "size_ns",
+    "crosshairCursor": "crosshair",
+    "disappearingItemCursor": "no",
+}
+
 if ctypes:
     class CURSORINFO(ctypes.Structure):
         _fields_ = [
@@ -66,11 +83,18 @@ class WebRTCHost:
         
         # Cursor tracking state (Cross-platform ready)
         self._cursor_handles = {}
-        if ctypes and hasattr(ctypes, "windll"):
+        if platform.system() == "Windows" and ctypes:
             for cid in WIN_CURSOR_NAME_MAP.keys():
                 h = ctypes.windll.user32.LoadCursorW(0, cid)
                 if h:
                     self._cursor_handles[h] = WIN_CURSOR_NAME_MAP[cid]
+        elif platform.system() == "Darwin":
+            try:
+                from AppKit import NSCursor
+                self._ns_cursor = NSCursor
+            except ImportError:
+                self._ns_cursor = None
+        
         self._last_cursor_name = None
         self._cursor_task = None
 
@@ -161,25 +185,36 @@ class WebRTCHost:
 
     async def _cursor_tracking_loop(self, channel):
         """Periodically check the host's move cursor shape and sync it to the client."""
-        if not ctypes or not hasattr(ctypes, "windll"):
-            # Placeholder for macOS/Linux detection logic
-            return
-
-        info = CURSORINFO()
-        info.cbSize = ctypes.sizeof(CURSORINFO)
-        user32 = ctypes.windll.user32
-
+        sys_platform = platform.system()
+        
         try:
             while channel.readyState == "open":
-                info.cbSize = ctypes.sizeof(CURSORINFO) # Reset every time for safety
-                if user32.GetCursorInfo(ctypes.byref(info)):
-                    # Map the current handle to our standardized cursor names
-                    cname = self._cursor_handles.get(info.hCursor, "arrow")
-                    if cname != self._last_cursor_name:
-                        self._last_cursor_name = cname
-                        msg = ControlMessage(type=MessageType.CURSOR_UPDATE, cursor_name=cname)
-                        channel.send(msg.to_json())
-                await asyncio.sleep(0.1) # 10Hz sync rate
+                cname = None
+                
+                if sys_platform == "Windows" and ctypes:
+                    info = CURSORINFO()
+                    info.cbSize = ctypes.sizeof(CURSORINFO)
+                    if ctypes.windll.user32.GetCursorInfo(ctypes.byref(info)):
+                        cname = self._cursor_handles.get(info.hCursor, "arrow")
+                
+                elif sys_platform == "Darwin" and self._ns_cursor:
+                    try:
+                        curr = self._ns_cursor.currentSystemCursor()
+                        # Map native Mac cursor objects to names
+                        for method_name, standardized_name in MAC_CURSOR_MAP.items():
+                            if hasattr(self._ns_cursor, method_name):
+                                if curr == getattr(self._ns_cursor, method_name)():
+                                    cname = standardized_name
+                                    break
+                    except Exception:
+                        pass
+                
+                if cname and cname != self._last_cursor_name:
+                    self._last_cursor_name = cname
+                    msg = ControlMessage(type=MessageType.CURSOR_UPDATE, cursor_name=cname)
+                    channel.send(msg.to_json())
+                    
+                await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             pass
         except Exception as e:

@@ -27,7 +27,7 @@ Each computer starts looking at every available "door" to reach the other side:
 
 ### Step 3: The SDP Handshake (Sharing the Menu)
 The Host and Client exchange a text file called an **SDP (Session Description Protocol)**. This file contains a "menu" of all the IPs found in Step 2.
-*   *Signaling Server encrypts this exchange so only the two computers see the IPs.*
+*   *Signaling Server encryp ts this exchange so only the two computers see the IPs.*
 
 ### Step 4: ICE Negotiation (The Ping Test)
 Both computers simultaneously start "pining" every pair of IPs they received. In your logs, you see this as `Check CandidatePair`.

@@ -4,6 +4,7 @@ import ctypes
 import json
 import threading
 import time
+import platform
 from pynput.keyboard import Listener as KeyboardListener, Key, KeyCode
 from pynput.mouse import Listener as MouseListener, Button as MouseButton
 from common.messages import ControlMessage, MessageType
@@ -21,10 +22,19 @@ class InputSender:
         self._pressed_mouse_buttons = set()
         self._enable_focus_gating = True
   
-        # Cross-platform cursor handling: current handle and mapping.
-        self._h_cursor_current = None
-        if hasattr(ctypes, "windll"):
-            self._h_cursor_current = ctypes.windll.user32.LoadCursorW(0, 32512)  # Default arrow
+        # Cross-platform cursor handling. Initialize with default arrow.
+        self._current_cursor_obj = None
+        self._ns_cursor = None
+        
+        if platform.system() == "Windows" and hasattr(ctypes, "windll"):
+            self._current_cursor_obj = ctypes.windll.user32.LoadCursorW(0, 32512)  # IDC_ARROW
+        elif platform.system() == "Darwin":
+            try:
+                from AppKit import NSCursor
+                self._ns_cursor = NSCursor
+                self._current_cursor_obj = NSCursor.arrowCursor()
+            except ImportError:
+                pass
 
         if self.channel:
             @self.channel.on("message")
@@ -137,13 +147,26 @@ class InputSender:
             delta -= 0x10000
         return delta
 
+    def _apply_cursor(self):
+        """Apply the currently selected cursor shape to the local window."""
+        if not self._current_cursor_obj:
+            return
+            
+        sys_platform = platform.system()
+        if sys_platform == "Windows" and hasattr(ctypes, "windll"):
+            ctypes.windll.user32.SetCursor(self._current_cursor_obj)
+        elif sys_platform == "Darwin":
+            try:
+                self._current_cursor_obj.set()
+            except Exception:
+                pass
+
     def _mouse_callback(self, event, x, y, flags, param):
         if not self.channel or self.channel.readyState != "open":
             return
 
         # Synchronize local cursor with the remote host's current shape.
-        if self._h_cursor_current:
-            ctypes.windll.user32.SetCursor(self._h_cursor_current)
+        self._apply_cursor()
         is_foreground = True
         if self._enable_focus_gating:
             is_foreground = self._is_target_window_foreground()
@@ -448,26 +471,40 @@ class InputSender:
             logger.error(f"Keyboard release handling error: {e}")
 
     def _update_local_cursor(self, cursor_name: str):
-        """Map standardized names to platform-specific cursor IDs and apply them."""
-        if not hasattr(ctypes, "windll"):
-            return # Placeholder for Mac/Linux client cursor setting logic
-
-        # Mapping names to Windows IDC constants.
-        mapping = {
-            "arrow": 32512, "ibeam": 32513, "wait": 32514, "crosshair": 32515,
-            "hand": 32649, "size_all": 32646, "size_we": 32644, "size_ns": 32645,
-            "size_nwse": 32642, "size_nesw": 32643, "uparrow": 32516,
-            "no": 32648, "appstarting": 32650, "help": 32651
-        }
+        """Map standardized names to platform-specific cursor objects and apply them."""
+        sys_platform = platform.system()
         
-        try:
+        if sys_platform == "Windows" and hasattr(ctypes, "windll"):
+            mapping = {
+                "arrow": 32512, "ibeam": 32513, "wait": 32514, "crosshair": 32515,
+                "hand": 32649, "size_all": 32646, "size_we": 32644, "size_ns": 32645,
+                "size_nwse": 32642, "size_nesw": 32643, "uparrow": 32516,
+                "no": 32648, "appstarting": 32650, "help": 32651
+            }
             idc = mapping.get(cursor_name, 32512)
             h = ctypes.windll.user32.LoadCursorW(0, idc)
             if h:
-                self._h_cursor_current = h
-                ctypes.windll.user32.SetCursor(h)
-        except Exception:
-            pass
+                self._current_cursor_obj = h
+                self._apply_cursor()
+                
+        elif sys_platform == "Darwin" and self._ns_cursor:
+            # Map standardized names to AppKit NSCursor methods
+            mapping = {
+                "arrow": "arrowCursor",
+                "ibeam": "IBeamCursor",
+                "hand": "pointingHandCursor",
+                "crosshair": "crosshairCursor",
+                "size_we": "resizeLeftRightCursor",
+                "size_ns": "resizeUpDownCursor",
+                "size_all": "openHandCursor",
+            }
+            method_name = mapping.get(cursor_name, "arrowCursor")
+            if hasattr(self._ns_cursor, method_name):
+                try:
+                    self._current_cursor_obj = getattr(self._ns_cursor, method_name)()
+                    self._apply_cursor()
+                except Exception:
+                    pass
 
     def close(self):
         if self._focus_thread_stop:
