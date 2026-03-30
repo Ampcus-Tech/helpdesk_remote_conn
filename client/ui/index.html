@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Remote Client - Viewer</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="connect-screen" class="container">
+        <header>
+            <h1>Join Session</h1>
+            <p class="subtitle">Enter the Host ID to start viewing</p>
+        </header>
+
+        <main>
+            <div class="input-group">
+                <label for="target-host-id">Target Host ID</label>
+                <input type="text" id="target-host-id" placeholder="e.g. 123456" maxlength="6">
+            </div>
+
+            <div class="status-section">
+                <span id="status-text">Ready to connect.</span>
+            </div>
+
+            <button id="connect-btn" class="primary-btn">Connect to Host</button>
+        </main>
+    </div>
+
+    <div id="viewer-screen" class="viewer-container hidden">
+        <div class="viewer-header">
+            <span id="viewer-status">Connected to: <span id="viewing-id">...</span></span>
+            <button id="disconnect-btn" class="danger-btn-sm">Disconnect</button>
+        </div>
+        <div class="video-wrapper">
+            <img id="remote-video" src="" alt="Remote Desktop Stream">
+        </div>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>

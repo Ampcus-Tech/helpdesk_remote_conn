@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Remote Host - Helpdesk</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Remote Host</h1>
+            <p class="subtitle">Share your screen with support</p>
+        </header>
+
+        <main>
+            <div class="card">
+                <label>HOST ID</label>
+                <div id="host-id" class="id-display">------</div>
+                <div class="button-row">
+                    <button id="copy-btn" class="secondary-btn">Copy</button>
+                    <button id="new-id-btn" class="secondary-btn">New ID</button>
+                </div>
+            </div>
+
+            <div class="status-section">
+                <div class="status-indicator"></div>
+                <span id="status-text">Click Start to begin.</span>
+            </div>
+
+            <button id="start-btn" class="primary-btn">Start Host</button>
+            <button id="stop-btn" class="danger-btn hidden">Stop Host</button>
+        </main>
+
+        <footer>
+            <p id="signaling-url">Signaling: ...</p>
+        </footer>
+    </div>
+    <script src="renderer.js"></script>
+</body>
+</html>
