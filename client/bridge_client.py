@@ -16,6 +16,67 @@ def emit(message):
     print(f"EVENT:{message}", flush=True)
 
 class BridgeClient(WebRTCClient):
+    def __init__(self, target_host_id, on_event=None):
+        super().__init__(target_host_id, on_event=on_event)
+        # Disable legacy OpenCV components
+        self.display = None 
+
+    async def create_pc(self):
+        # Optimized version of create_pc for Electron (no InputSender/Display)
+        # Convert dict configs to RTCIceServer objects
+        from aiortc import RTCConfiguration, RTCIceServer
+        from common.config import ICE_SERVERS, CTRL_CHANNEL_NAME, VIDEO_CODEC
+        from aiortc import RTCRtpSender
+
+        ice_servers = [RTCIceServer(**server) for server in ICE_SERVERS]
+        config = RTCConfiguration(iceServers=ice_servers)
+        self.pc = RTCPeerConnection(configuration=config)
+        
+        self.channel = self.pc.createDataChannel(CTRL_CHANNEL_NAME)
+        video_transceiver = self.pc.addTransceiver("video", direction="recvonly")
+
+        caps = RTCRtpSender.getCapabilities("video").codecs
+        if VIDEO_CODEC == "h264":
+            main_mime = "video/H264"
+        else:
+            main_mime = "video/VP8"
+
+        preferred = [c for c in caps if c.mimeType == main_mime]
+        preferred.extend([c for c in caps if c.mimeType == "video/rtx"])
+        video_transceiver.setCodecPreferences(preferred)
+
+        @self.pc.on("track")
+        def on_track(track):
+            if track.kind == "video":
+                asyncio.ensure_future(self.consume_video(track))
+
+        @self.pc.on("iceconnectionstatechange")
+        async def on_iceconnectionstatechange():
+            if self.pc.iceConnectionState == "failed":
+                await self.pc.close()
+
+    async def start(self):
+        await self.create_pc()
+        
+        # Set up data channel listener for cursor updates
+        @self.channel.on("message")
+        def on_message(message):
+            try:
+                data = json.loads(message)
+                if data.get("type") == "cursor_update":
+                    cursor_name = data.get("cursor_name")
+                    if cursor_name:
+                        emit(f"CURSOR:{cursor_name}")
+            except Exception:
+                pass
+
+        # Continue with base start logic
+        offer = await self.pc.createOffer()
+        await self.pc.setLocalDescription(offer)
+        local = self.pc.localDescription
+        asyncio.create_task(self._signaling_loop(local))
+        await self.connected_event.wait()
+
     async def consume_video(self, track):
         while True:
             try:
