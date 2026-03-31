@@ -104,6 +104,9 @@ class WebRTCHost:
         self._outgoing_accepted = {}
         self._incoming_targets = {}
         self._incoming_files = {}
+        self._chat_opened = False
+        self._file_opened = False
+        self._channels_ready = False
         
         # Cursor tracking state (Cross-platform ready)
         self._cursor_handles = {}
@@ -235,7 +238,25 @@ class WebRTCHost:
         except Exception:
             pass
 
+    def _check_data_channels_ready(self) -> None:
+        if self._channels_ready:
+            return
+        if self._chat_opened and self._file_opened:
+            self._channels_ready = True
+            self._emit("SESSION_CONNECTED")
+
     def _setup_chat_channel(self, channel):
+        @channel.on("open")
+        def _on_chat_open():
+            self._chat_opened = True
+            self._check_data_channels_ready()
+
+        @channel.on("close")
+        def _on_chat_close():
+            self._chat_opened = False
+            self._channels_ready = False
+            self._emit("SESSION_CHANNELS_CLOSED")
+
         @channel.on("message")
         def on_message(message):
             try:
@@ -246,6 +267,17 @@ class WebRTCHost:
                 logger.error(f"Chat channel message error: {e}")
 
     def _setup_file_channel(self, channel):
+        @channel.on("open")
+        def _on_file_open():
+            self._file_opened = True
+            self._check_data_channels_ready()
+
+        @channel.on("close")
+        def _on_file_close():
+            self._file_opened = False
+            self._channels_ready = False
+            self._emit("SESSION_CHANNELS_CLOSED")
+
         @channel.on("message")
         def on_message(message):
             try:

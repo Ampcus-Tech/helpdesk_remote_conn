@@ -57,6 +57,9 @@ class WebRTCClient:
         self._outgoing_accepted: dict[str, bool] = {}
         self._incoming_targets: dict[str, str] = {}
         self._incoming_files: dict[str, object] = {}
+        self._chat_opened = False
+        self._file_opened = False
+        self._channels_ready = False
 
     def _emit(self, message: str) -> None:
         """Send lightweight status updates to the UI (if provided)."""
@@ -94,6 +97,29 @@ class WebRTCClient:
         self._setup_chat_channel()
         self._setup_file_channel()
 
+        # Enable chat/files UI only after both DataChannels are open.
+        @self.chat_channel.on("open")
+        def _on_chat_open():
+            self._chat_opened = True
+            self._check_data_channels_ready()
+
+        @self.chat_channel.on("close")
+        def _on_chat_close():
+            self._chat_opened = False
+            self._channels_ready = False
+            self._emit("SESSION_CHANNELS_CLOSED")
+
+        @self.file_channel.on("open")
+        def _on_file_open():
+            self._file_opened = True
+            self._check_data_channels_ready()
+
+        @self.file_channel.on("close")
+        def _on_file_close():
+            self._file_opened = False
+            self._channels_ready = False
+            self._emit("SESSION_CHANNELS_CLOSED")
+
         @self.pc.on("track")
         def on_track(track):
             logger.info(f"Received {track.kind} track")
@@ -106,6 +132,13 @@ class WebRTCClient:
             logger.info(f"ICE connection state is {self.pc.iceConnectionState}")
             if self.pc.iceConnectionState == "failed":
                 await self.pc.close()
+
+    def _check_data_channels_ready(self) -> None:
+        if self._channels_ready:
+            return
+        if self._chat_opened and self._file_opened:
+            self._channels_ready = True
+            self._emit("SESSION_CONNECTED")
 
     def _emit_chat(self, sender: str, text: str) -> None:
         try:

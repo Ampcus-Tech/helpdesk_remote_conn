@@ -41,6 +41,7 @@ class HostUI(QMainWindow):
         self._worker_thread = None
         self._is_running = False
         self._host = None
+        self._channels_ready = False
 
         self._build_ui()
         self._timer = QTimer(self)
@@ -68,8 +69,8 @@ class HostUI(QMainWindow):
         layout.addWidget(self.status_label)
         layout.addWidget(QLabel(f"Signaling: {SIGNALING_URL}"))
 
-        tabs = QTabWidget()
-        layout.addWidget(tabs, 1)
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs, 1)
 
         chat_tab = QWidget()
         chat_layout = QVBoxLayout(chat_tab)
@@ -81,23 +82,32 @@ class HostUI(QMainWindow):
         self.chat_input.setPlaceholderText("Type a message...")
         self.chat_input.returnPressed.connect(self._send_chat)
         chat_row.addWidget(self.chat_input, 1)
-        send_btn = QPushButton("Send")
-        send_btn.clicked.connect(self._send_chat)
-        chat_row.addWidget(send_btn)
+        self.send_chat_btn = QPushButton("Send")
+        self.send_chat_btn.clicked.connect(self._send_chat)
+        chat_row.addWidget(self.send_chat_btn)
         chat_layout.addLayout(chat_row)
-        tabs.addTab(chat_tab, "Chat")
+        self.tabs.addTab(chat_tab, "Chat")
+        self.chat_tab_idx = 0
 
         file_tab = QWidget()
         file_layout = QVBoxLayout(file_tab)
-        send_file_btn = QPushButton("Send File...")
-        send_file_btn.clicked.connect(self._send_file)
-        file_layout.addWidget(send_file_btn)
+        self.send_file_btn = QPushButton("Send File...")
+        self.send_file_btn.clicked.connect(self._send_file)
+        file_layout.addWidget(self.send_file_btn)
         self.file_status = QLabel("No transfer yet.")
         file_layout.addWidget(self.file_status)
         self.file_log = QTextEdit()
         self.file_log.setReadOnly(True)
         file_layout.addWidget(self.file_log, 1)
-        tabs.addTab(file_tab, "Files")
+        self.tabs.addTab(file_tab, "Files")
+        self.files_tab_idx = 1
+
+        # UltraViewer-like behavior: Chat/Files enabled only after connection.
+        self.chat_input.setEnabled(False)
+        self.send_chat_btn.setEnabled(False)
+        self.send_file_btn.setEnabled(False)
+        self.tabs.setTabEnabled(self.chat_tab_idx, False)
+        self.tabs.setTabEnabled(self.files_tab_idx, False)
 
     def _new_host_id(self) -> None:
         if self._is_running:
@@ -159,8 +169,8 @@ class HostUI(QMainWindow):
         text = self.chat_input.text().strip()
         if not text:
             return
-        if not self._host:
-            QMessageBox.information(self, "Not connected", "Start host and wait for client connection first.")
+        if not self._channels_ready or not self._host:
+            QMessageBox.information(self, "Not connected", "Wait for connection to complete first.")
             return
         try:
             self._host.send_chat(text)
@@ -169,8 +179,8 @@ class HostUI(QMainWindow):
             QMessageBox.warning(self, "Chat send failed", str(e))
 
     def _send_file(self) -> None:
-        if not self._host:
-            QMessageBox.information(self, "Not connected", "Start host and wait for client connection first.")
+        if not self._channels_ready or not self._host:
+            QMessageBox.information(self, "Not connected", "Wait for connection to complete first.")
             return
         path, _ = QFileDialog.getOpenFileName(self, "Select file to send")
         if not path:
@@ -190,7 +200,25 @@ class HostUI(QMainWindow):
 
             kind = item[0]
             if kind == "status":
-                self.status_label.setText(item[1])
+                msg = item[1]
+                if msg == "SESSION_CONNECTED":
+                    self._channels_ready = True
+                    self.tabs.setTabEnabled(self.chat_tab_idx, True)
+                    self.tabs.setTabEnabled(self.files_tab_idx, True)
+                    self.chat_input.setEnabled(True)
+                    self.send_chat_btn.setEnabled(True)
+                    self.send_file_btn.setEnabled(True)
+                    self.status_label.setText("Connected. Chat and Files enabled.")
+                elif msg == "SESSION_CHANNELS_CLOSED":
+                    self._channels_ready = False
+                    self.tabs.setTabEnabled(self.chat_tab_idx, False)
+                    self.tabs.setTabEnabled(self.files_tab_idx, False)
+                    self.chat_input.setEnabled(False)
+                    self.send_chat_btn.setEnabled(False)
+                    self.send_file_btn.setEnabled(False)
+                    self.status_label.setText("Disconnected. Chat and Files disabled.")
+                else:
+                    self.status_label.setText(msg)
             elif kind == "chat":
                 self.chat_view.append(f"{item[1]}: {item[2]}")
             elif kind == "file_progress":
