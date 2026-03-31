@@ -88,8 +88,13 @@ class HostUI:
     def _worker_main(self, host_id: str) -> None:
         async def run() -> None:
             setup_logging()
-            host = WebRTCHost(host_id, on_event=self._emit_from_worker)
-            await host.run()
+            try:
+                host = WebRTCHost(host_id, on_event=self._emit_from_worker)
+                await host.run()
+            except PermissionError as e:
+                self._emit_from_worker(f"PERMISSION_ERROR: {e}")
+            except Exception as e:
+                self._emit_from_worker(f"ERROR: {e}")
 
         try:
             asyncio.run(run())
@@ -125,6 +130,10 @@ class HostUI:
                 if msg == "__DONE__":
                     self._is_running = False
                     self.status_var.set("Host stopped.")
+                elif msg.startswith("PERMISSION_ERROR:"):
+                    error_msg = msg.replace("PERMISSION_ERROR: ", "")
+                    self.status_var.set("Permission denied!")
+                    messagebox.showerror("macOS Permission Required", error_msg)
                 elif msg.startswith("ERROR:"):
                     self.status_var.set(msg)
                 else:

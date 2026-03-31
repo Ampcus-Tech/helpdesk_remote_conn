@@ -2,6 +2,8 @@ import mss
 import cv2
 import numpy as np
 import time
+import platform
+import sys
 from av import VideoFrame
 from aiortc import VideoStreamTrack
 
@@ -19,8 +21,24 @@ class ScreenCaptureTrack(VideoStreamTrack):
         if scale is None:
             scale = QUALITY_SETTINGS.get(DEFAULT_QUALITY, {}).get("scale", 1.0)
         self.scale = float(scale)
-        self.sct = mss.mss()
-        self.monitor = self.sct.monitors[1]  # primary monitor
+        
+        # Check macOS permissions
+        if platform.system() == "Darwin":
+            try:
+                self.sct = mss.mss()
+                self.monitor = self.sct.monitors[1]  # primary monitor
+                # Test screen capture permission
+                test_capture = self.sct.grab(self.monitor)
+            except Exception as e:
+                raise PermissionError(
+                    "macOS Screen Recording permission required.\n"
+                    "Go to System Settings → Privacy & Security → Screen Recording\n"
+                    "and enable for your terminal application."
+                )
+        else:
+            self.sct = mss.mss()
+            self.monitor = self.sct.monitors[1]  # primary monitor
+            
         self.last_capture_time = 0
         self._interval = 1.0 / self.fps
 
