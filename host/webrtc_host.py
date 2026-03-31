@@ -104,6 +104,7 @@ class WebRTCHost:
         self._outgoing_accepted = {}
         self._incoming_targets = {}
         self._incoming_files = {}
+        self._incoming_offers = {}
         self._chat_opened = False
         self._file_opened = False
         self._channels_ready = False
@@ -293,11 +294,10 @@ class WebRTCHost:
                     file_id = payload["file_id"]
                     file_name = payload["file_name"]
                     file_size = int(payload["file_size"])
-                    save_path = self.on_file_offer(file_name, file_size) if self.on_file_offer else None
-                    accepted = bool(save_path)
-                    if accepted:
-                        self._incoming_targets[file_id] = save_path
-                    channel.send(json.dumps({"type": MessageType.FILE_ACCEPT, "file_id": file_id, "accepted": accepted}))
+                    self._incoming_offers[file_id] = {"file_name": file_name, "file_size": file_size}
+                    if self.on_file_offer:
+                        # Non-blocking UI prompt flow; UI must call respond_file_offer().
+                        self.on_file_offer(file_id, file_name, file_size)
 
                 elif msg_type == MessageType.FILE_ACCEPT:
                     file_id = payload["file_id"]
@@ -335,6 +335,7 @@ class WebRTCHost:
                     file_id = payload["file_id"]
                     file_state = self._incoming_files.pop(file_id, None)
                     self._incoming_targets.pop(file_id, None)
+                    self._incoming_offers.pop(file_id, None)
                     if not file_state:
                         return
                     file_state["fh"].close()
@@ -411,6 +412,21 @@ class WebRTCHost:
             raise RuntimeError("Host loop is not running")
         fut = asyncio.run_coroutine_threadsafe(self._send_file_task(file_path), self.loop)
         fut.result()
+
+    def respond_file_offer(self, file_id: str, save_path: str | None) -> None:
+        if not self.file_channel or self.file_channel.readyState != "open":
+            return
+        offer = self._incoming_offers.get(file_id)
+        accepted = bool(save_path)
+        if accepted and offer:
+            self._incoming_targets[file_id] = save_path
+        self.file_channel.send(json.dumps({
+            "type": MessageType.FILE_ACCEPT,
+            "file_id": file_id,
+            "accepted": accepted,
+        }))
+        if not accepted:
+            self._incoming_offers.pop(file_id, None)
 
     async def _cursor_tracking_loop(self, channel):
         """Periodically check the host's move cursor shape and sync it to the client."""

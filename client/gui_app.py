@@ -3,6 +3,7 @@ import os
 import queue
 import sys
 import threading
+from pathlib import Path
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import (
@@ -80,12 +81,8 @@ class ClientUI(QMainWindow):
     def _emit_file_done(self, file_name: str, path: str, direction: str) -> None:
         self._ui_queue.put(("file_done", file_name, path, direction))
 
-    def _on_file_offer(self, file_name: str, file_size: int) -> str | None:
-        holder = {"path": None}
-        event = threading.Event()
-        self._ui_queue.put(("file_offer_prompt", file_name, file_size, holder, event))
-        event.wait()
-        return holder["path"]
+    def _on_file_offer(self, file_id: str, file_name: str, file_size: int) -> None:
+        self._ui_queue.put(("file_offer_prompt", file_id, file_name, file_size))
 
     def _worker_main(self, target_host_id: str) -> None:
         async def run() -> None:
@@ -166,10 +163,10 @@ class ClientUI(QMainWindow):
                 if self._chat_window:
                     self._chat_window.file_done(*item[1:])
             elif kind == "file_offer_prompt":
-                file_name, file_size, holder, event = item[1], item[2], item[3], item[4]
+                file_id, file_name, file_size = item[1], item[2], item[3]
                 save_path, _ = QFileDialog.getSaveFileName(self, "Save incoming file", file_name)
-                holder["path"] = save_path or None
-                event.set()
+                if self._client:
+                    self._client.respond_file_offer(file_id, save_path or None)
             elif kind == "error":
                 self.status_label.setText(f"ERROR: {item[1]}")
             elif kind == "done":
@@ -226,7 +223,11 @@ class ClientChatWindow(QMainWindow):
         self.file_status.setText(f"{direction.upper()} {file_name}: {pct}% ({transferred}/{total} bytes)")
 
     def file_done(self, file_name: str, path: str, direction: str) -> None:
-        self.chat_view.append(f"{direction.upper()} complete: {file_name} -> {path}")
+        nice_name = Path(file_name).name
+        if direction == "send":
+            self.chat_view.append(f"SENT: {nice_name}")
+        else:
+            self.chat_view.append(f"RECEIVED: {nice_name}")
         self.file_status.setText(" ")
 
     def send_current_chat(self) -> None:
@@ -246,7 +247,7 @@ class ClientChatWindow(QMainWindow):
         if not path:
             return
         try:
-            self.chat_view.append(f"SEND: {path}")
+            self.chat_view.append(f"SEND: {Path(path).name}")
             self._parent_ui._client.send_file(path)
         except Exception as e:
             QMessageBox.warning(self, "File send failed", str(e))
