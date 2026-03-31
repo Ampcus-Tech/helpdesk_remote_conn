@@ -18,6 +18,12 @@ class MessageType:
     KEYBOARD = "keyboard"
     QUALITY_CHANGE = "quality_change"
     CURSOR_UPDATE = "cursor_update"
+    CHAT_TEXT = "chat_text"
+    FILE_OFFER = "file_offer"
+    FILE_ACCEPT = "file_accept"
+    FILE_START = "file_start"
+    FILE_CHUNK = "file_chunk"
+    FILE_END = "file_end"
 
 @dataclass
 class SignalingMessage:

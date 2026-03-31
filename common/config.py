@@ -12,6 +12,7 @@ SIGNALING_PORT = 8080
 # FOR NGROK: Change this to "wss://xxxx.ngrok-free.app"
 # FOR LOCAL: It will automatically use ws://0.0.0.0:8080
 SIGNALING_URL = os.getenv("SIGNALING_URL", "wss://kiera-unsensory-kathrine.ngrok-free.dev")
+NO_RELAY = os.getenv("NO_RELAY", "").lower() in ("1", "true", "yes")
 
 
 def _metered_turn_urls_udp_first() -> list[str]:
@@ -36,6 +37,17 @@ def _metered_turn_urls_tcp_first() -> list[str]:
 
 
 def _default_ice_servers() -> list[dict]:
+    if NO_RELAY:
+        # STUN-only mode (no TURN relay). Direct P2P only.
+        return [
+            {
+                "urls": [
+                    "stun:stun.l.google.com:19302",
+                    "stun:stun1.l.google.com:19302",
+                ]
+            }
+        ]
+
     # Metered Open Relay: create your own app at https://www.metered.ca/tools/openrelay/
     turn_user = os.getenv("TURN_USERNAME", "d398a24c0efc6ba4581dce38")
     turn_cred = os.getenv("TURN_CREDENTIAL", "QijFwDMhlV3d0uM4")
@@ -99,6 +111,8 @@ VIDEO_BITRATE_MAX = int(os.getenv("VIDEO_BITRATE_MAX", "4000000"))
 
 # Data Channel Names
 CTRL_CHANNEL_NAME = "control"
+CHAT_CHANNEL_NAME = "chat"
+FILE_CHANNEL_NAME = "file"
 
 # Logging Config
 def setup_logging(level=logging.INFO):

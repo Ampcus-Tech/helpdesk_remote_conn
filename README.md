@@ -1,6 +1,6 @@
 # Remote Desktop App
 
-A Python-based remote desktop application using WebRTC (`aiortc`), WebSockets for signaling, `mss` for screen capture, OpenCV for display and frame processing, and `pynput` for remote input control.
+A Python-based remote desktop application using WebRTC (`aiortc`), WebSockets for signaling, `mss` for screen capture, OpenCV for display and frame processing, `pynput` for remote input control, and PyQt6 for Host/Client UI panels.
 
 ## Project Structure
 
@@ -20,7 +20,7 @@ A Python-based remote desktop application using WebRTC (`aiortc`), WebSockets fo
    ```bash
    pip install -r requirements.txt
    ```
-   *Note: `aiortc`, `websockets`, `mss`, `pynput`, `opencv-python` are required. PyAV is automatically installed with `aiortc`.*
+  *Note: `aiortc`, `websockets`, `mss`, `pynput`, `opencv-python`, `PyQt6` are required. PyAV is automatically installed with `aiortc`.*
 
 ## Running the Application
 
@@ -61,7 +61,23 @@ Client PC (enter Host ID and click Connect):
 ```bash
 python client/gui_app.py
 ```
-After connecting, an OpenCV video window will appear on the Client side.
+After connecting, an OpenCV video window appears on the Client side and the PyQt6 window provides Chat/Files tabs on both sides.
+
+## P2P Chat and File Transfer
+
+- Chat and file transfer use WebRTC DataChannels (`chat` and `file`), so payload data is peer-to-peer after session setup.
+- Incoming file transfers prompt the receiver to choose a save path before transfer starts.
+
+### No Relay Mode (Direct P2P Only)
+
+To disable TURN relay and allow only direct P2P candidates:
+
+```bash
+# Windows PowerShell
+$env:NO_RELAY="1"
+```
+
+Then start Host/Client from the same terminal session.
 
 ## Running across the Internet (Office Firewall Fix)
 

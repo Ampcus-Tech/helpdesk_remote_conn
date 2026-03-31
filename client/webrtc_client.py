@@ -1,33 +1,62 @@
 import asyncio
+import base64
 import json
 import logging
+import os
+import time
+import uuid
 import cv2
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
 from aiortc import RTCRtpSender
 import websockets
 
 import sys
-import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.messages import SignalingMessage, MessageType
-from common.config import SIGNALING_URL, ICE_SERVERS, CTRL_CHANNEL_NAME, VIDEO_CODEC
+from common.config import (
+    SIGNALING_URL,
+    ICE_SERVERS,
+    CTRL_CHANNEL_NAME,
+    CHAT_CHANNEL_NAME,
+    FILE_CHANNEL_NAME,
+    VIDEO_CODEC,
+)
 from client.display import Display
 from client.input_sender import InputSender
 
 logger = logging.getLogger("webrtc_client")
 
 class WebRTCClient:
-    def __init__(self, target_host_id, on_event=None):
+    def __init__(
+        self,
+        target_host_id,
+        on_event=None,
+        on_chat=None,
+        on_file_offer=None,
+        on_file_progress=None,
+        on_file_done=None,
+    ):
         self.target_host_id = target_host_id
         self.pc = None
         self.ws = None
         self.channel = None
+        self.chat_channel = None
+        self.file_channel = None
+        self.loop = None
         
         self.display = Display()
         self.input_sender = None
         self.connected_event = asyncio.Event()
         self.on_event = on_event
+        self.on_chat = on_chat
+        self.on_file_offer = on_file_offer
+        self.on_file_progress = on_file_progress
+        self.on_file_done = on_file_done
         self._video_started = False
+        self._pending_outgoing_accept: dict[str, asyncio.Event] = {}
+        self._outgoing_accepted: dict[str, bool] = {}
+        self._incoming_targets: dict[str, str] = {}
+        self._incoming_files: dict[str, object] = {}
 
     def _emit(self, message: str) -> None:
         """Send lightweight status updates to the UI (if provided)."""
@@ -39,12 +68,15 @@ class WebRTCClient:
             pass
 
     async def create_pc(self):
+        self.loop = asyncio.get_running_loop()
         # Convert dict configs to RTCIceServer objects
         ice_servers = [RTCIceServer(**server) for server in ICE_SERVERS]
         config = RTCConfiguration(iceServers=ice_servers)
         self.pc = RTCPeerConnection(configuration=config)
         
         self.channel = self.pc.createDataChannel(CTRL_CHANNEL_NAME)
+        self.chat_channel = self.pc.createDataChannel(CHAT_CHANNEL_NAME)
+        self.file_channel = self.pc.createDataChannel(FILE_CHANNEL_NAME)
         video_transceiver = self.pc.addTransceiver("video", direction="recvonly")
 
         # Prefer a specific codec for negotiation/decoding (helps quality).
@@ -59,6 +91,8 @@ class WebRTCClient:
         video_transceiver.setCodecPreferences(preferred)
         loop = asyncio.get_running_loop()
         self.input_sender = InputSender(self.display.window_name, self.channel, loop)
+        self._setup_chat_channel()
+        self._setup_file_channel()
 
         @self.pc.on("track")
         def on_track(track):
@@ -72,6 +106,174 @@ class WebRTCClient:
             logger.info(f"ICE connection state is {self.pc.iceConnectionState}")
             if self.pc.iceConnectionState == "failed":
                 await self.pc.close()
+
+    def _emit_chat(self, sender: str, text: str) -> None:
+        try:
+            if self.on_chat:
+                self.on_chat(sender, text)
+        except Exception:
+            pass
+
+    def _emit_file_progress(self, file_name: str, transferred: int, total: int, direction: str) -> None:
+        try:
+            if self.on_file_progress:
+                self.on_file_progress(file_name, transferred, total, direction)
+        except Exception:
+            pass
+
+    def _emit_file_done(self, file_name: str, path: str, direction: str) -> None:
+        try:
+            if self.on_file_done:
+                self.on_file_done(file_name, path, direction)
+        except Exception:
+            pass
+
+    def _setup_chat_channel(self) -> None:
+        @self.chat_channel.on("message")
+        def on_message(message):
+            try:
+                payload = json.loads(message)
+                if payload.get("type") == MessageType.CHAT_TEXT:
+                    text = payload.get("text", "")
+                    self._emit_chat("Host", text)
+            except Exception as e:
+                logger.error(f"Chat channel message error: {e}")
+
+    def _setup_file_channel(self) -> None:
+        @self.file_channel.on("message")
+        def on_message(message):
+            try:
+                payload = json.loads(message)
+                msg_type = payload.get("type")
+
+                if msg_type == MessageType.FILE_OFFER:
+                    file_id = payload["file_id"]
+                    file_name = payload["file_name"]
+                    file_size = int(payload["file_size"])
+                    save_path = None
+                    if self.on_file_offer:
+                        save_path = self.on_file_offer(file_name, file_size)
+                    accepted = bool(save_path)
+                    if accepted:
+                        self._incoming_targets[file_id] = save_path
+                    self.file_channel.send(json.dumps({
+                        "type": MessageType.FILE_ACCEPT,
+                        "file_id": file_id,
+                        "accepted": accepted,
+                    }))
+
+                elif msg_type == MessageType.FILE_ACCEPT:
+                    file_id = payload["file_id"]
+                    accepted = bool(payload.get("accepted"))
+                    self._outgoing_accepted[file_id] = accepted
+                    event = self._pending_outgoing_accept.get(file_id)
+                    if event and self.loop:
+                        self.loop.call_soon_threadsafe(event.set)
+
+                elif msg_type == MessageType.FILE_START:
+                    file_id = payload["file_id"]
+                    file_name = payload["file_name"]
+                    file_size = int(payload["file_size"])
+                    target_path = self._incoming_targets.get(file_id)
+                    if not target_path:
+                        return
+                    os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
+                    fh = open(target_path, "wb")
+                    self._incoming_files[file_id] = {
+                        "fh": fh,
+                        "name": file_name,
+                        "size": file_size,
+                        "written": 0,
+                        "path": target_path,
+                    }
+
+                elif msg_type == MessageType.FILE_CHUNK:
+                    file_id = payload["file_id"]
+                    file_state = self._incoming_files.get(file_id)
+                    if not file_state:
+                        return
+                    chunk = base64.b64decode(payload["chunk_b64"])
+                    file_state["fh"].write(chunk)
+                    file_state["written"] += len(chunk)
+                    self._emit_file_progress(file_state["name"], file_state["written"], file_state["size"], "recv")
+
+                elif msg_type == MessageType.FILE_END:
+                    file_id = payload["file_id"]
+                    file_state = self._incoming_files.pop(file_id, None)
+                    self._incoming_targets.pop(file_id, None)
+                    if not file_state:
+                        return
+                    file_state["fh"].close()
+                    self._emit_file_done(file_state["name"], file_state["path"], "recv")
+            except Exception as e:
+                logger.error(f"File channel message error: {e}")
+
+    def send_chat(self, text: str) -> None:
+        if not text.strip() or not self.chat_channel:
+            return
+        payload = {"type": MessageType.CHAT_TEXT, "text": text.strip(), "ts": int(time.time())}
+        if self.chat_channel.readyState == "open":
+            self.chat_channel.send(json.dumps(payload))
+            self._emit_chat("You", text.strip())
+
+    async def _send_file_task(self, file_path: str) -> None:
+        if not self.file_channel or self.file_channel.readyState != "open":
+            raise RuntimeError("File channel is not open")
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(file_path)
+
+        file_id = uuid.uuid4().hex
+        file_name = os.path.basename(file_path)
+        file_size = os.path.getsize(file_path)
+        chunk_size = 64 * 1024
+
+        accept_event = asyncio.Event()
+        self._pending_outgoing_accept[file_id] = accept_event
+        self.file_channel.send(json.dumps({
+            "type": MessageType.FILE_OFFER,
+            "file_id": file_id,
+            "file_name": file_name,
+            "file_size": file_size,
+        }))
+        await asyncio.wait_for(accept_event.wait(), timeout=120)
+        self._pending_outgoing_accept.pop(file_id, None)
+        if not self._outgoing_accepted.pop(file_id, False):
+            self._emit("Remote rejected file transfer.")
+            return
+
+        self.file_channel.send(json.dumps({
+            "type": MessageType.FILE_START,
+            "file_id": file_id,
+            "file_name": file_name,
+            "file_size": file_size,
+            "chunk_size": chunk_size,
+        }))
+
+        sent = 0
+        with open(file_path, "rb") as fh:
+            while True:
+                chunk = fh.read(chunk_size)
+                if not chunk:
+                    break
+                while self.file_channel.bufferedAmount > (4 * 1024 * 1024):
+                    await asyncio.sleep(0.01)
+                self.file_channel.send(json.dumps({
+                    "type": MessageType.FILE_CHUNK,
+                    "file_id": file_id,
+                    "chunk_b64": base64.b64encode(chunk).decode("ascii"),
+                }))
+                sent += len(chunk)
+                self._emit_file_progress(file_name, sent, file_size, "send")
+                await asyncio.sleep(0)
+
+        self.file_channel.send(json.dumps({"type": MessageType.FILE_END, "file_id": file_id}))
+        self._emit_file_done(file_name, file_path, "send")
+
+    def send_file(self, file_path: str) -> None:
+        if not self.loop or self.loop.is_closed():
+            raise RuntimeError("Client loop is not running")
+        fut = asyncio.run_coroutine_threadsafe(self._send_file_task(file_path), self.loop)
+        fut.result()
 
     async def consume_video(self, track):
         while True:

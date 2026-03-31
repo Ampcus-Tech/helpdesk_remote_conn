@@ -1,16 +1,28 @@
 import asyncio
+import os
 import queue
 import random
 import string
-import threading
-import tkinter as tk
-from tkinter import messagebox
-from typing import Optional
-
 import sys
-import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import threading
 
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import (
+    QApplication,
+    QFileDialog,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QTabWidget,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.config import SIGNALING_URL, setup_logging
 from host.webrtc_host import WebRTCHost
 
@@ -19,130 +31,190 @@ def generate_host_id(length: int = 6) -> str:
     return "".join(random.choices(string.digits, k=length))
 
 
-class HostUI:
+class HostUI(QMainWindow):
     def __init__(self) -> None:
-        self.root = tk.Tk()
-        self.root.title("Remote Host - Helpdesk")
-        self.root.geometry("420x260")
+        super().__init__()
+        self.setWindowTitle("Remote Host - Helpdesk (PyQt6)")
+        self.resize(760, 520)
 
-        self._ui_queue: queue.Queue[str] = queue.Queue()
-        self._worker_thread: Optional[threading.Thread] = None
+        self._ui_queue = queue.Queue()
+        self._worker_thread = None
         self._is_running = False
-
-        host_id = generate_host_id()
-        self.host_id_var = tk.StringVar(value=host_id)
-        self.status_var = tk.StringVar(value="Click 'Start Host' to begin.")
+        self._host = None
 
         self._build_ui()
-        self._poll_ui_queue()
-
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._poll_ui_queue)
+        self._timer.start(150)
 
     def _build_ui(self) -> None:
-        pad = {"padx": 12, "pady": 6}
+        root = QWidget()
+        self.setCentralWidget(root)
+        layout = QVBoxLayout(root)
 
-        tk.Label(self.root, text="Host ID", font=("Segoe UI", 12)).pack(**pad)
-        tk.Label(
-            self.root,
-            textvariable=self.host_id_var,
-            font=("Consolas", 28, "bold"),
-            fg="#0b5",
-        ).pack(**pad)
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Host ID"))
+        self.host_id_input = QLineEdit(generate_host_id())
+        top.addWidget(self.host_id_input, 1)
+        new_id_btn = QPushButton("New ID")
+        new_id_btn.clicked.connect(self._new_host_id)
+        top.addWidget(new_id_btn)
+        self.start_btn = QPushButton("Start Host")
+        self.start_btn.clicked.connect(self._start_host)
+        top.addWidget(self.start_btn)
+        layout.addLayout(top)
 
-        btn_row = tk.Frame(self.root)
-        btn_row.pack(pady=6)
+        self.status_label = QLabel("Click 'Start Host' to begin.")
+        layout.addWidget(self.status_label)
+        layout.addWidget(QLabel(f"Signaling: {SIGNALING_URL}"))
 
-        tk.Button(btn_row, text="Copy", width=10, command=self._copy_host_id).grid(row=0, column=0, padx=6)
-        tk.Button(btn_row, text="New ID", width=10, command=self._new_host_id).grid(row=0, column=1, padx=6)
+        tabs = QTabWidget()
+        layout.addWidget(tabs, 1)
 
-        tk.Label(
-            self.root,
-            text=f"Signaling: {SIGNALING_URL}",
-            font=("Segoe UI", 9),
-            wraplength=380,
-            justify="center",
-            fg="#555",
-        ).pack(pady=10)
+        chat_tab = QWidget()
+        chat_layout = QVBoxLayout(chat_tab)
+        self.chat_view = QTextEdit()
+        self.chat_view.setReadOnly(True)
+        chat_layout.addWidget(self.chat_view, 1)
+        chat_row = QHBoxLayout()
+        self.chat_input = QLineEdit()
+        self.chat_input.setPlaceholderText("Type a message...")
+        self.chat_input.returnPressed.connect(self._send_chat)
+        chat_row.addWidget(self.chat_input, 1)
+        send_btn = QPushButton("Send")
+        send_btn.clicked.connect(self._send_chat)
+        chat_row.addWidget(send_btn)
+        chat_layout.addLayout(chat_row)
+        tabs.addTab(chat_tab, "Chat")
 
-        tk.Button(self.root, text="Start Host", height=2, command=self._start_host).pack(pady=6, fill="x", padx=20)
-
-        tk.Label(self.root, textvariable=self.status_var, wraplength=380, justify="center", fg="#222").pack(pady=6)
-
-    def _copy_host_id(self) -> None:
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(self.host_id_var.get())
-            self.status_var.set("Host ID copied.")
-        except Exception as e:
-            messagebox.showerror("Copy failed", str(e))
+        file_tab = QWidget()
+        file_layout = QVBoxLayout(file_tab)
+        send_file_btn = QPushButton("Send File...")
+        send_file_btn.clicked.connect(self._send_file)
+        file_layout.addWidget(send_file_btn)
+        self.file_status = QLabel("No transfer yet.")
+        file_layout.addWidget(self.file_status)
+        self.file_log = QTextEdit()
+        self.file_log.setReadOnly(True)
+        file_layout.addWidget(self.file_log, 1)
+        tabs.addTab(file_tab, "Files")
 
     def _new_host_id(self) -> None:
         if self._is_running:
             return
-        self.host_id_var.set(generate_host_id())
-        self.status_var.set("New Host ID generated. Click 'Start Host'.")
+        self.host_id_input.setText(generate_host_id())
 
-    def _emit_from_worker(self, message: str) -> None:
-        self._ui_queue.put(message)
+    def _emit_event(self, message: str) -> None:
+        self._ui_queue.put(("status", message))
+
+    def _emit_chat(self, sender: str, text: str) -> None:
+        self._ui_queue.put(("chat", sender, text))
+
+    def _emit_file_progress(self, file_name: str, transferred: int, total: int, direction: str) -> None:
+        self._ui_queue.put(("file_progress", file_name, transferred, total, direction))
+
+    def _emit_file_done(self, file_name: str, path: str, direction: str) -> None:
+        self._ui_queue.put(("file_done", file_name, path, direction))
+
+    def _on_file_offer(self, file_name: str, file_size: int) -> str | None:
+        holder = {"path": None}
+        event = threading.Event()
+        self._ui_queue.put(("file_offer_prompt", file_name, file_size, holder, event))
+        event.wait()
+        return holder["path"]
 
     def _worker_main(self, host_id: str) -> None:
         async def run() -> None:
             setup_logging()
-            host = WebRTCHost(host_id, on_event=self._emit_from_worker)
-            await host.run()
+            self._host = WebRTCHost(
+                host_id,
+                on_event=self._emit_event,
+                on_chat=self._emit_chat,
+                on_file_offer=self._on_file_offer,
+                on_file_progress=self._emit_file_progress,
+                on_file_done=self._emit_file_done,
+            )
+            await self._host.run()
 
         try:
             asyncio.run(run())
         except Exception as e:
-            self._emit_from_worker(f"ERROR: {e}")
+            self._ui_queue.put(("error", str(e)))
         finally:
-            self._emit_from_worker("__DONE__")
+            self._ui_queue.put(("done",))
 
     def _start_host(self) -> None:
         if self._is_running:
             return
-
-        host_id = self.host_id_var.get().strip()
+        host_id = self.host_id_input.text().strip()
         if not host_id:
-            messagebox.showwarning("Host ID missing", "Generate a Host ID first.")
+            QMessageBox.warning(self, "Host ID missing", "Generate a Host ID first.")
             return
-
         self._is_running = True
-        self.status_var.set("Starting host...")
-
-        # Disable UI interactions by simply preventing actions.
-        self._worker_thread = threading.Thread(
-            target=self._worker_main,
-            args=(host_id,),
-            daemon=True,
-        )
+        self.status_label.setText("Starting host...")
+        self._worker_thread = threading.Thread(target=self._worker_main, args=(host_id,), daemon=True)
         self._worker_thread.start()
 
-    def _poll_ui_queue(self) -> None:
+    def _send_chat(self) -> None:
+        text = self.chat_input.text().strip()
+        if not text:
+            return
+        if not self._host:
+            QMessageBox.information(self, "Not connected", "Start host and wait for client connection first.")
+            return
         try:
-            while True:
-                msg = self._ui_queue.get_nowait()
-                if msg == "__DONE__":
-                    self._is_running = False
-                    self.status_var.set("Host stopped.")
-                elif msg.startswith("ERROR:"):
-                    self.status_var.set(msg)
-                else:
-                    # Coalesce repeated messages by just replacing the status text.
-                    self.status_var.set(msg)
-        except queue.Empty:
-            pass
+            self._host.send_chat(text)
+            self.chat_input.clear()
+        except Exception as e:
+            QMessageBox.warning(self, "Chat send failed", str(e))
 
-        self.root.after(200, self._poll_ui_queue)
+    def _send_file(self) -> None:
+        if not self._host:
+            QMessageBox.information(self, "Not connected", "Start host and wait for client connection first.")
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Select file to send")
+        if not path:
+            return
+        try:
+            self.file_log.append(f"Sending: {path}")
+            self._host.send_file(path)
+        except Exception as e:
+            QMessageBox.warning(self, "File send failed", str(e))
 
-    def _on_close(self) -> None:
-        # Worker thread is daemon; closing the window ends the process.
-        self.root.destroy()
+    def _poll_ui_queue(self) -> None:
+        while True:
+            try:
+                item = self._ui_queue.get_nowait()
+            except queue.Empty:
+                break
 
-    def run(self) -> None:
-        self.root.mainloop()
+            kind = item[0]
+            if kind == "status":
+                self.status_label.setText(item[1])
+            elif kind == "chat":
+                self.chat_view.append(f"{item[1]}: {item[2]}")
+            elif kind == "file_progress":
+                file_name, transferred, total, direction = item[1], item[2], item[3], item[4]
+                pct = int((transferred / total) * 100) if total else 0
+                self.file_status.setText(f"{direction.upper()} {file_name}: {pct}% ({transferred}/{total} bytes)")
+            elif kind == "file_done":
+                file_name, path, direction = item[1], item[2], item[3]
+                self.file_log.append(f"{direction.upper()} complete: {file_name} -> {path}")
+            elif kind == "file_offer_prompt":
+                file_name, file_size, holder, event = item[1], item[2], item[3], item[4]
+                save_path, _ = QFileDialog.getSaveFileName(self, "Save incoming file", file_name)
+                holder["path"] = save_path or None
+                event.set()
+            elif kind == "error":
+                self.status_label.setText(f"ERROR: {item[1]}")
+            elif kind == "done":
+                self._is_running = False
+                self.status_label.setText("Host stopped.")
 
 
 if __name__ == "__main__":
-    HostUI().run()
+    app = QApplication(sys.argv)
+    win = HostUI()
+    win.show()
+    sys.exit(app.exec())
 
