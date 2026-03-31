@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -34,14 +33,15 @@ def generate_host_id(length: int = 6) -> str:
 class HostUI(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("Remote Host - Helpdesk (PyQt6)")
-        self.resize(760, 520)
+        self.setWindowTitle("Remote Host - Helpdesk")
+        self.resize(420, 260)
 
         self._ui_queue = queue.Queue()
         self._worker_thread = None
         self._is_running = False
         self._host = None
         self._channels_ready = False
+        self._chat_window: "HostChatWindow | None" = None
 
         self._build_ui()
         self._timer = QTimer(self)
@@ -53,61 +53,25 @@ class HostUI(QMainWindow):
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
 
-        top = QHBoxLayout()
-        top.addWidget(QLabel("Host ID"))
+        layout.addWidget(QLabel("Host ID"))
         self.host_id_input = QLineEdit(generate_host_id())
-        top.addWidget(self.host_id_input, 1)
+        self.host_id_input.setReadOnly(True)
+        layout.addWidget(self.host_id_input)
+
+        buttons_row = QHBoxLayout()
         new_id_btn = QPushButton("New ID")
         new_id_btn.clicked.connect(self._new_host_id)
-        top.addWidget(new_id_btn)
+        buttons_row.addWidget(new_id_btn)
         self.start_btn = QPushButton("Start Host")
         self.start_btn.clicked.connect(self._start_host)
-        top.addWidget(self.start_btn)
-        layout.addLayout(top)
+        buttons_row.addWidget(self.start_btn)
+        layout.addLayout(buttons_row)
 
         self.status_label = QLabel("Click 'Start Host' to begin.")
+        self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
+
         layout.addWidget(QLabel(f"Signaling: {SIGNALING_URL}"))
-
-        self.tabs = QTabWidget()
-        layout.addWidget(self.tabs, 1)
-
-        chat_tab = QWidget()
-        chat_layout = QVBoxLayout(chat_tab)
-        self.chat_view = QTextEdit()
-        self.chat_view.setReadOnly(True)
-        chat_layout.addWidget(self.chat_view, 1)
-        chat_row = QHBoxLayout()
-        self.chat_input = QLineEdit()
-        self.chat_input.setPlaceholderText("Type a message...")
-        self.chat_input.returnPressed.connect(self._send_chat)
-        chat_row.addWidget(self.chat_input, 1)
-        self.send_chat_btn = QPushButton("Send")
-        self.send_chat_btn.clicked.connect(self._send_chat)
-        chat_row.addWidget(self.send_chat_btn)
-        chat_layout.addLayout(chat_row)
-        self.tabs.addTab(chat_tab, "Chat")
-        self.chat_tab_idx = 0
-
-        file_tab = QWidget()
-        file_layout = QVBoxLayout(file_tab)
-        self.send_file_btn = QPushButton("Send File...")
-        self.send_file_btn.clicked.connect(self._send_file)
-        file_layout.addWidget(self.send_file_btn)
-        self.file_status = QLabel("No transfer yet.")
-        file_layout.addWidget(self.file_status)
-        self.file_log = QTextEdit()
-        self.file_log.setReadOnly(True)
-        file_layout.addWidget(self.file_log, 1)
-        self.tabs.addTab(file_tab, "Files")
-        self.files_tab_idx = 1
-
-        # UltraViewer-like behavior: Chat/Files enabled only after connection.
-        self.chat_input.setEnabled(False)
-        self.send_chat_btn.setEnabled(False)
-        self.send_file_btn.setEnabled(False)
-        self.tabs.setTabEnabled(self.chat_tab_idx, False)
-        self.tabs.setTabEnabled(self.files_tab_idx, False)
 
     def _new_host_id(self) -> None:
         if self._is_running:
@@ -166,30 +130,14 @@ class HostUI(QMainWindow):
         self._worker_thread.start()
 
     def _send_chat(self) -> None:
-        text = self.chat_input.text().strip()
-        if not text:
+        if not self._chat_window:
             return
-        if not self._channels_ready or not self._host:
-            QMessageBox.information(self, "Not connected", "Wait for connection to complete first.")
-            return
-        try:
-            self._host.send_chat(text)
-            self.chat_input.clear()
-        except Exception as e:
-            QMessageBox.warning(self, "Chat send failed", str(e))
+        self._chat_window.send_current_chat()
 
     def _send_file(self) -> None:
-        if not self._channels_ready or not self._host:
-            QMessageBox.information(self, "Not connected", "Wait for connection to complete first.")
+        if not self._chat_window:
             return
-        path, _ = QFileDialog.getOpenFileName(self, "Select file to send")
-        if not path:
-            return
-        try:
-            self.file_log.append(f"Sending: {path}")
-            self._host.send_file(path)
-        except Exception as e:
-            QMessageBox.warning(self, "File send failed", str(e))
+        self._chat_window.send_file()
 
     def _poll_ui_queue(self) -> None:
         while True:
@@ -203,31 +151,27 @@ class HostUI(QMainWindow):
                 msg = item[1]
                 if msg == "SESSION_CONNECTED":
                     self._channels_ready = True
-                    self.tabs.setTabEnabled(self.chat_tab_idx, True)
-                    self.tabs.setTabEnabled(self.files_tab_idx, True)
-                    self.chat_input.setEnabled(True)
-                    self.send_chat_btn.setEnabled(True)
-                    self.send_file_btn.setEnabled(True)
-                    self.status_label.setText("Connected. Chat and Files enabled.")
+                    self.status_label.setText("Client connected.")
+                    if not self._chat_window:
+                        self._chat_window = HostChatWindow(self)
+                        self._chat_window.show()
                 elif msg == "SESSION_CHANNELS_CLOSED":
                     self._channels_ready = False
-                    self.tabs.setTabEnabled(self.chat_tab_idx, False)
-                    self.tabs.setTabEnabled(self.files_tab_idx, False)
-                    self.chat_input.setEnabled(False)
-                    self.send_chat_btn.setEnabled(False)
-                    self.send_file_btn.setEnabled(False)
-                    self.status_label.setText("Disconnected. Chat and Files disabled.")
+                    self.status_label.setText("Client disconnected.")
+                    if self._chat_window:
+                        self._chat_window.close()
+                        self._chat_window = None
                 else:
                     self.status_label.setText(msg)
             elif kind == "chat":
-                self.chat_view.append(f"{item[1]}: {item[2]}")
+                if self._chat_window:
+                    self._chat_window.append_chat(item[1], item[2])
             elif kind == "file_progress":
-                file_name, transferred, total, direction = item[1], item[2], item[3], item[4]
-                pct = int((transferred / total) * 100) if total else 0
-                self.file_status.setText(f"{direction.upper()} {file_name}: {pct}% ({transferred}/{total} bytes)")
+                if self._chat_window:
+                    self._chat_window.update_file_progress(*item[1:])
             elif kind == "file_done":
-                file_name, path, direction = item[1], item[2], item[3]
-                self.file_log.append(f"{direction.upper()} complete: {file_name} -> {path}")
+                if self._chat_window:
+                    self._chat_window.file_done(*item[1:])
             elif kind == "file_offer_prompt":
                 file_name, file_size, holder, event = item[1], item[2], item[3], item[4]
                 save_path, _ = QFileDialog.getSaveFileName(self, "Save incoming file", file_name)
@@ -238,6 +182,81 @@ class HostUI(QMainWindow):
             elif kind == "done":
                 self._is_running = False
                 self.status_label.setText("Host stopped.")
+
+
+class HostChatWindow(QMainWindow):
+    """UltraViewer-like chat window shown only after connection (host side)."""
+
+    def __init__(self, parent_ui: HostUI) -> None:
+        super().__init__(parent=parent_ui)
+        self._parent_ui = parent_ui
+        self.setWindowTitle("UltraViewer-style Chat - Host")
+        self.resize(380, 420)
+
+        root = QWidget()
+        self.setCentralWidget(root)
+        layout = QVBoxLayout(root)
+
+        header = QLabel("Who's viewing your computer")
+        layout.addWidget(header)
+
+        self.peer_label = QLabel("● Client connected")
+        layout.addWidget(self.peer_label)
+
+        layout.addWidget(QLabel("Chat Log"))
+
+        self.chat_view = QTextEdit()
+        self.chat_view.setReadOnly(True)
+        layout.addWidget(self.chat_view, 1)
+
+        self.file_status = QLabel(" ")
+        layout.addWidget(self.file_status)
+
+        bottom_row = QHBoxLayout()
+        self.chat_input = QLineEdit()
+        self.chat_input.setPlaceholderText("Type a message...")
+        self.chat_input.returnPressed.connect(self.send_current_chat)
+        bottom_row.addWidget(self.chat_input, 1)
+        send_btn = QPushButton("Send")
+        send_btn.clicked.connect(self.send_current_chat)
+        bottom_row.addWidget(send_btn)
+        file_btn = QPushButton("Send file")
+        file_btn.clicked.connect(self.send_file)
+        bottom_row.addWidget(file_btn)
+        layout.addLayout(bottom_row)
+
+    def append_chat(self, sender: str, text: str) -> None:
+        self.chat_view.append(f"{sender}: {text}")
+
+    def update_file_progress(self, file_name: str, transferred: int, total: int, direction: str) -> None:
+        pct = int((transferred / total) * 100) if total else 0
+        self.file_status.setText(f"{direction.upper()} {file_name}: {pct}% ({transferred}/{total} bytes)")
+
+    def file_done(self, file_name: str, path: str, direction: str) -> None:
+        self.chat_view.append(f"{direction.upper()} complete: {file_name} -> {path}")
+        self.file_status.setText(" ")
+
+    def send_current_chat(self) -> None:
+        text = self.chat_input.text().strip()
+        if not text or not self._parent_ui._host:
+            return
+        try:
+            self._parent_ui._host.send_chat(text)
+            self.chat_input.clear()
+        except Exception as e:
+            QMessageBox.warning(self, "Chat send failed", str(e))
+
+    def send_file(self) -> None:
+        if not self._parent_ui._host:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Select file to send")
+        if not path:
+            return
+        try:
+            self.chat_view.append(f"SEND: {path}")
+            self._parent_ui._host.send_file(path)
+        except Exception as e:
+            QMessageBox.warning(self, "File send failed", str(e))
 
 
 if __name__ == "__main__":
