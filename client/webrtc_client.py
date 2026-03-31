@@ -172,6 +172,11 @@ class WebRTCClient:
             except Exception as e:
                 logger.error(f"Chat channel message error: {e}")
 
+        # Handle race: channel might already be open.
+        if self.chat_channel.readyState == "open":
+            self._chat_opened = True
+            self._check_data_channels_ready()
+
     def _setup_file_channel(self) -> None:
         @self.file_channel.on("message")
         def on_message(message):
@@ -240,6 +245,11 @@ class WebRTCClient:
                     self._emit_file_done(file_state["name"], file_state["path"], "recv")
             except Exception as e:
                 logger.error(f"File channel message error: {e}")
+
+        # Handle race: channel might already be open.
+        if self.file_channel.readyState == "open":
+            self._file_opened = True
+            self._check_data_channels_ready()
 
     def send_chat(self, text: str) -> None:
         if not text.strip() or not self.chat_channel:

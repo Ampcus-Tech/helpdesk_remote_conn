@@ -266,6 +266,11 @@ class WebRTCHost:
             except Exception as e:
                 logger.error(f"Chat channel message error: {e}")
 
+        # If channel is already open before handlers are attached, mark ready immediately.
+        if channel.readyState == "open":
+            self._chat_opened = True
+            self._check_data_channels_ready()
+
     def _setup_file_channel(self, channel):
         @channel.on("open")
         def _on_file_open():
@@ -336,6 +341,11 @@ class WebRTCHost:
                     self._emit_file_done(file_state["name"], file_state["path"], "recv")
             except Exception as e:
                 logger.error(f"File channel message error: {e}")
+
+        # If channel is already open before handlers are attached, mark ready immediately.
+        if channel.readyState == "open":
+            self._file_opened = True
+            self._check_data_channels_ready()
 
     def send_chat(self, text: str) -> None:
         if not text.strip() or not self.chat_channel or self.chat_channel.readyState != "open":
