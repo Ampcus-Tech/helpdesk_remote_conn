@@ -35,6 +35,13 @@ class InputSender:
                 self._current_cursor_obj = NSCursor.arrowCursor()
             except ImportError:
                 pass
+        elif platform.system() == "Linux":
+            try:
+                from Xlib import display, X
+                self._x_display = display.Display()
+                self._x_window_id = None
+            except ImportError:
+                pass
 
         if self.channel:
             @self.channel.on("message")
@@ -505,6 +512,37 @@ class InputSender:
                     self._apply_cursor()
                 except Exception:
                     pass
+                    
+        elif sys_platform == "Linux" and hasattr(self, "_x_display") and self._x_display:
+            try:
+                from Xlib import X
+                # Find current OpenCV window if not already found
+                if not self._x_window_id:
+                    # Generic search for window by title
+                    root = self._x_display.screen().root
+                    window_ids = root.get_full_property(self._x_display.intern_atom('_NET_CLIENT_LIST'), X.AnyPropertyType).value
+                    for wid in window_ids:
+                        win = self._x_display.create_resource_object('window', wid)
+                        name = win.get_wm_name()
+                        if name == self.window_name:
+                            self._x_window_id = win
+                            break
+                
+                if self._x_window_id:
+                    # Map names to X11 Font Cursors
+                    # http://tronche.com/gui/x/xlib/appendix/b/
+                    mapping = {
+                        "arrow": 68, "ibeam": 152, "wait": 150, "crosshair": 34,
+                        "hand": 60, "size_all": 52, "size_we": 108, "size_ns": 116,
+                        "size_nwse": 134, "size_nesw": 12, "uparrow": 144,
+                        "no": 30, "help": 92
+                    }
+                    cursor_id = mapping.get(cursor_name, 68)
+                    cursor = self._x_display.create_font_cursor(cursor_id)
+                    self._x_window_id.define_cursor(cursor)
+                    self._x_display.flush()
+            except Exception:
+                pass
 
     def close(self):
         if self._focus_thread_stop:

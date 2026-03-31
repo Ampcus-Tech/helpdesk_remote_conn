@@ -9,6 +9,10 @@ try:
     if platform.system() == "Windows":
         import ctypes
         from ctypes import wintypes
+    elif platform.system() == "Linux":
+        from Xlib import X, display
+        import Xlib.ext.xfixes as xfixes
+        ctypes = None
     else:
         ctypes = None
 except ImportError:
@@ -62,6 +66,19 @@ MAC_CURSOR_MAP = {
     "disappearingItemCursor": "no",
 }
 
+# Linux system cursor method/name map
+LINUX_CURSOR_MAP = {
+    "left_ptr": "arrow",
+    "xterm": "ibeam",
+    "hand2": "hand",
+    "fleur": "size_all",
+    "sb_h_double_arrow": "size_we",
+    "sb_v_double_arrow": "size_ns",
+    "cross": "crosshair",
+    "circle": "no",
+    "question_arrow": "help",
+}
+
 if ctypes:
     class CURSORINFO(ctypes.Structure):
         _fields_ = [
@@ -94,6 +111,12 @@ class WebRTCHost:
                 self._ns_cursor = NSCursor
             except ImportError:
                 self._ns_cursor = None
+        elif platform.system() == "Linux":
+            try:
+                from Xlib import X, display
+                self._x_display = display.Display()
+            except Exception:
+                self._x_display = None
         
         self._last_cursor_name = None
         self._cursor_task = None
@@ -206,6 +229,18 @@ class WebRTCHost:
                                 if curr == getattr(self._ns_cursor, method_name)():
                                     cname = standardized_name
                                     break
+                    except Exception:
+                        pass
+                
+                elif sys_platform == "Linux" and hasattr(self, "_x_display") and self._x_display:
+                    try:
+                        from Xlib.ext import xfixes
+                        cursor_img = xfixes.get_cursor_image(self._x_display.screen().root)
+                        name = getattr(cursor_img, "name", None)
+                        if name in LINUX_CURSOR_MAP:
+                            cname = LINUX_CURSOR_MAP[name]
+                        else:
+                            cname = "arrow" 
                     except Exception:
                         pass
                 
