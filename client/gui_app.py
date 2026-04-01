@@ -1,16 +1,51 @@
 import asyncio
-import os
+import logging
+import multiprocessing
 import queue
+import sys
 import threading
+import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from typing import Optional
+from typing import Optional, Union
 
-import sys
+import os
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common.config import setup_logging
 from client.webrtc_client import WebRTCClient
+
+
+def _darwin_client_process_entry(host_id: str, event_queue: "multiprocessing.Queue") -> None:
+    """
+    macOS: OpenCV HighGUI (namedWindow/imshow) must run on the process main thread.
+    A background Tk worker thread violates that and triggers cv2.error. This entry
+    runs asyncio.run on the child process's main thread instead.
+    """
+
+    async def run() -> None:
+        setup_logging()
+        logging.getLogger().setLevel(logging.INFO)
+        print(
+            f"\n[client/gui child pid={os.getpid()}] host_id={host_id!r}\n",
+            file=sys.stderr,
+            flush=True,
+        )
+
+        def emit(msg: str) -> None:
+            event_queue.put(msg)
+
+        client = WebRTCClient(host_id, on_event=emit)
+        await client.run()
+
+    try:
+        asyncio.run(run())
+    except Exception as e:
+        traceback.print_exc()
+        event_queue.put(f"ERROR: {type(e).__name__}: {e}")
+    finally:
+        event_queue.put("__DONE__")
 
 
 class ClientChatWindow:
@@ -83,9 +118,12 @@ class ClientUI:
         self.root.title("Remote Client - Helpdesk")
         self.root.geometry("420x240")
 
-        self._ui_queue: "queue.Queue[tuple]" = queue.Queue()
+        self._ui_queue: Union[queue.Queue[Union[str, tuple]],multiprocessing.Queue] = queue.Queue()
         self._worker_thread: Optional[threading.Thread] = None
+        self._worker_proc: Optional[multiprocessing.Process] = None
         self._is_connecting = False
+        self._last_worker_message: str = ""
+        self._use_child_process = sys.platform == "darwin"
         self._client: Optional[WebRTCClient] = None
         self._chat_window: Optional[ClientChatWindow] = None
         self._chat_backlog: list[tuple[str, str]] = []
@@ -111,12 +149,12 @@ class ClientUI:
         tk.Label(
             self.root, textvariable=self.status_var, wraplength=380, justify="center", fg="#222"
         ).pack(pady=4)
-        tk.Label(
-            self.root,
-            text="Tip: OpenCV will open a separate video window.",
-            font=("Segoe UI", 9),
-            fg="#555",
-        ).pack(pady=(0, 4))
+        tip = (
+            "Tip: A separate video window opens (OpenCV on macOS runs in a helper process)."
+            if self._use_child_process
+            else "Tip: OpenCV will open a separate video window."
+        )
+        tk.Label(self.root, text=tip, font=("Segoe UI", 9), fg="#555").pack(pady=(0, 4))
 
     def _open_chat_window(self) -> None:
         if self._chat_window and tk.Toplevel.winfo_exists(self._chat_window.top):
@@ -147,9 +185,15 @@ class ClientUI:
     def _on_file_offer(self, file_id: str, file_name: str, file_size: int) -> None:
         self._ui_queue.put(("file_offer", file_id, file_name, file_size))
 
-    def _worker_main(self, target_host_id: str) -> None:
+    def _worker_main_thread(self, target_host_id: str) -> None:
         async def run() -> None:
             setup_logging()
+            logging.getLogger().setLevel(logging.INFO)
+            print(
+                f"\n[client/gui] Starting session for host_id={target_host_id!r}\n",
+                file=sys.stderr,
+                flush=True,
+            )
             self._client = WebRTCClient(
                 target_host_id,
                 on_event=self._emit_event,
@@ -161,9 +205,10 @@ class ClientUI:
             await self._client.run()
 
         try:
-            asyncio.run(run())
+           asyncio.run(run())
         except Exception as e:
-            self._ui_queue.put(("error", str(e)))
+            traceback.print_exc()
+            self._ui_queue.put(("error", f"{type(e).__name__}: {e}"))
         finally:
             self._ui_queue.put(("done",))
 
@@ -178,9 +223,24 @@ class ClientUI:
             messagebox.showwarning("Invalid Host ID", "Host ID should be digits only.")
             return
         self._is_connecting = True
+        self._last_worker_message = ""
         self.status_var.set("Connecting...")
-        self._worker_thread = threading.Thread(target=self._worker_main, args=(host_id,), daemon=True)
-        self._worker_thread.start()
+
+        if self._use_child_process:
+            self._ui_queue = multiprocessing.Queue()
+            self._worker_proc = multiprocessing.Process(
+                target=_darwin_client_process_entry,
+                args=(host_id, self._ui_queue),
+                daemon=True,
+            )
+            self._worker_proc.start()
+        else:
+            self._worker_thread = threading.Thread(
+                target=self._worker_main_thread,
+                args=(host_id,),
+                daemon=True,
+            )
+            self._worker_thread.start()
 
     def _send_chat_text(self, text: str) -> None:
         if not self._client:
@@ -238,13 +298,31 @@ class ClientUI:
                     self.status_var.set(f"ERROR: {rest[0]}")
                 elif kind == "done":
                     self._is_connecting = False
-                    self.status_var.set("Disconnected.")
+                    self._worker_proc = None
+                    if self._last_worker_message:
+                        self.status_var.set(self._last_worker_message)
+                        print(
+                            f"[client/gui] Session finished. Last status:\n{self._last_worker_message}\n",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                    else:
+                        self.status_var.set("Disconnected.")
+                elif msg.startswith("ERROR:"):
+                    self._last_worker_message = msg
+                    self.status_var.set(msg)
+                else:
+                    self._last_worker_message = msg
+                    self.status_var.set(msg)
         except queue.Empty:
             pass
 
         self.root.after(200, self._poll_ui_queue)
 
     def _on_close(self) -> None:
+        if self._worker_proc is not None and self._worker_proc.is_alive():
+            self._worker_proc.terminate()
+            self._worker_proc.join(timeout=3)
         self.root.destroy()
 
     def run(self) -> None:
@@ -252,5 +330,5 @@ class ClientUI:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     ClientUI().run()
-

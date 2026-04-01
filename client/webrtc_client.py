@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import traceback
 import os
 import time
 import uuid
@@ -25,6 +26,11 @@ from client.display import Display
 from client.input_sender import InputSender
 
 logger = logging.getLogger("webrtc_client")
+
+
+def _client_print(msg: str) -> None:
+    """Always visible in terminal (setup_logging may only configure file handlers)."""
+    print(f"[webrtc_client] {msg}", file=sys.stderr, flush=True)
 
 class WebRTCClient:
     def __init__(
@@ -53,6 +59,7 @@ class WebRTCClient:
         self.on_file_progress = on_file_progress
         self.on_file_done = on_file_done
         self._video_started = False
+        self._handshake_ok = False
         self._pending_outgoing_accept: dict[str, asyncio.Event] = {}
         self._outgoing_accepted: dict[str, bool] = {}
         self._incoming_targets: dict[str, str] = {}
@@ -130,8 +137,14 @@ class WebRTCClient:
 
         @self.pc.on("iceconnectionstatechange")
         async def on_iceconnectionstatechange():
-            logger.info(f"ICE connection state is {self.pc.iceConnectionState}")
-            if self.pc.iceConnectionState == "failed":
+            state = self.pc.iceConnectionState
+            logger.info("ICE connection state is %s", state)
+            _client_print(f"ICE state: {state}")
+            if state == "failed":
+                _client_print(
+                    "ICE failed — NAT/firewall or TURN/STUN mismatch. "
+                    "Check ICE_SERVERS / TURN credentials and that host is reachable."
+                )
                 await self.pc.close()
 
     def _check_data_channels_ready(self) -> None:
@@ -345,7 +358,9 @@ class WebRTCClient:
                 cv2.waitKey(1)
                 
             except Exception as e:
-                logger.error(f"Video track error: {e}")
+                logger.error("Video track error: %s", e)
+                _client_print(f"Video track ended: {type(e).__name__}: {e}")
+                self._emit(f"Video stopped: {e}")
                 break
 
     async def start(self):
@@ -363,38 +378,60 @@ class WebRTCClient:
         await self.connected_event.wait()
 
     async def _signaling_loop(self, local_desc: RTCSessionDescription):
+        self._handshake_ok = False
         try:
             self._emit("Connecting to signaling server...")
+            _client_print(f"Signaling URL: {SIGNALING_URL!r}")
             self.ws = await websockets.connect(SIGNALING_URL)
             find_msg = SignalingMessage(type=MessageType.FIND_HOST, host_id=self.target_host_id)
             await self.ws.send(find_msg.to_json())
-            
+
             offer_msg = SignalingMessage(
                 type=MessageType.SDP,
                 sdp={"sdp": local_desc.sdp, "type": local_desc.type}
             )
             await self.ws.send(offer_msg.to_json())
-            
+
             async for message in self.ws:
                 data = json.loads(message)
                 msg_type = data.get("type")
 
                 if msg_type == MessageType.HOST_NOT_FOUND:
-                    logger.error(f"Host {self.target_host_id} not found!")
-                    self._emit("Host ID not found. Check Host ID and try again.")
+                    reason = (
+                        f"Host ID {self.target_host_id!r} not registered on signaling server. "
+                        "Start the host app with the same ID and ensure signaling/server.py is running."
+                    )
+                    logger.error(reason)
+                    _client_print(reason)
+                    self._emit(reason)
                     self.connected_event.set()
                     break
-                    
+
                 elif msg_type == MessageType.SDP:
-                    logger.info("Received SDP answer")
-                    self._emit("SDP answer received. Waiting for video...")
+                    logger.info("Received SDP answer from host")
+                    self._emit("SDP answer received. Setting up WebRTC…")
                     sdp = data.get("sdp")
+                    if not sdp:
+                        raise RuntimeError("SDP answer missing sdp payload")
                     answer = RTCSessionDescription(sdp=sdp["sdp"], type=sdp["type"])
                     await self.pc.setRemoteDescription(answer)
+                    self._handshake_ok = True
+                    _client_print("SDP exchange complete; waiting for ICE + media.")
+                    self.connected_event.set()
+
+            if not self._handshake_ok and not self.connected_event.is_set():
+                reason = (
+                    "Signaling websocket closed before an answer was received "
+                    "(server restarted, ngrok session ended, or host disconnected)."
+                )
+                logger.error(reason)
+                _client_print(reason)
+                self._emit(reason)
+
         except asyncio.TimeoutError:
             logger.error("Signaling error: Timed out during opening handshake.")
             self._emit("Signaling timeout. Start signaling server first.")
-            print("\n" + "!"*60)
+            print("\n" + "!" * 60)
             print("DIAGNOSTIC: Handshake Timeout Detected!")
             print(f"Target URL: {SIGNALING_URL}")
             if "172." in SIGNALING_URL or "192.168." in SIGNALING_URL or "10." in SIGNALING_URL:
@@ -402,21 +439,57 @@ class WebRTCClient:
                 print("FIX: Both PCs must be on the same Wi-Fi, OR you must use Tailscale/Ngrok.")
             else:
                 print("REASON: The Signaling Server is not running or port 8080 is blocked by a firewall.")
-            print("!"*60 + "\n")
-            self.connected_event.set()
+            print("!" * 60 + "\n")
+        except websockets.exceptions.ConnectionClosed as e:
+            msg = (
+                f"Signaling WebSocket closed: {e.reason or e} (code {e.code}). "
+                "Often: wrong wss URL, ngrok limit, or host dropped off signaling."
+            )
+            logger.error(msg)
+            _client_print(msg)
+            self._emit(msg)
         except Exception as e:
-            logger.error(f"Signaling error: {e}")
-            self._emit(f"Signaling error: {e}")
-            self.connected_event.set()
-            
+            logger.error("Signaling error: %s", e)
+            traceback.print_exc()
+            _client_print(f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
+            self._emit(f"Signaling error: {type(e).__name__}: {e}")
+        finally:
+            if not self.connected_event.is_set():
+                self.connected_event.set()
+
     async def run(self):
         try:
             await self.start()
+            if not self._handshake_ok:
+                _client_print("Stopping: WebRTC handshake did not succeed.")
+                return
+
+            _client_print("Handshake OK — holding session until ICE closes or fails.")
+            while self.pc and self.pc.iceConnectionState not in ("failed", "closed"):
+                await asyncio.sleep(0.25)
+
+            final = self.pc.iceConnectionState if self.pc else "gone"
+            summary = f"Session ended (ICE: {final})."
+            logger.info(summary)
+            _client_print(summary)
+            self._emit(summary)
+
+        except Exception as e:
+            logger.exception("Client run failed")
+            traceback.print_exc()
+            _client_print(f"Fatal: {type(e).__name__}: {e}")
+            self._emit(f"ERROR: {type(e).__name__}: {e}")
         finally:
             if self.input_sender:
                 self.input_sender.close()
             if self.pc:
-                await self.pc.close()
+                try:
+                    await self.pc.close()
+                except Exception as e:
+                    logger.debug("pc.close: %s", e)
             if self.ws:
-                await self.ws.close()
+                try:
+                    await self.ws.close()
+                except Exception as e:
+                    logger.debug("ws.close: %s", e)
             self.display.close()

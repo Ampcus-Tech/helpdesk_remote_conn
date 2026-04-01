@@ -1,6 +1,7 @@
 from pynput.mouse import Controller as MouseController, Button
 from pynput.keyboard import Controller as KeyboardController, Key
 import logging
+import platform
 import sys
 import os
 
@@ -11,8 +12,23 @@ logger = logging.getLogger("input_receiver")
 
 class InputReceiver:
     def __init__(self):
-        self.mouse = MouseController()
-        self.keyboard = KeyboardController()
+        # Check macOS permissions for input control
+        if platform.system() == "Darwin":
+            try:
+                self.mouse = MouseController()
+                self.keyboard = KeyboardController()
+                # Test basic mouse movement to check accessibility permissions
+                original_pos = self.mouse.position
+                self.mouse.position = (original_pos[0], original_pos[1])
+            except Exception as e:
+                raise PermissionError(
+                    "macOS Accessibility permission required.\n"
+                    "Go to System Settings → Privacy & Security → Accessibility\n"
+                    "and enable for your terminal application."
+                )
+        else:
+            self.mouse = MouseController()
+            self.keyboard = KeyboardController()
         
         import mss
         with mss.mss() as sct:

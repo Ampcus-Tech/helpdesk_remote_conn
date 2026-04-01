@@ -51,7 +51,10 @@ def _default_ice_servers() -> list[dict]:
     # Metered Open Relay: create your own app at https://www.metered.ca/tools/openrelay/
     turn_user = os.getenv("TURN_USERNAME", "d398a24c0efc6ba4581dce38")
     turn_cred = os.getenv("TURN_CREDENTIAL", "QijFwDMhlV3d0uM4")
-    if os.getenv("ICE_UDP_TURN_FIRST", "").lower() in ("1", "true", "yes"):
+    # Latency-first default: prefer UDP relay when available.
+    # If your network blocks UDP TURN, set ICE_UDP_TURN_FIRST=0.
+    udp_first_env = os.getenv("ICE_UDP_TURN_FIRST", "1").lower()
+    if udp_first_env in ("1", "true", "yes"):
         turn_urls = _metered_turn_urls_udp_first()
     else:
         turn_urls = _metered_turn_urls_tcp_first()
@@ -85,7 +88,9 @@ def _load_ice_servers() -> list[dict]:
 ICE_SERVERS = _load_ice_servers()
 
 # Video settings
-TARGET_FPS = int(os.getenv("TARGET_FPS", "20"))
+# 24 FPS is a better default for interactive remote control over internet links:
+# it reduces bitrate spikes during full-window changes while staying visually smooth.
+TARGET_FPS = int(os.getenv("TARGET_FPS", "24"))
 DEFAULT_QUALITY = "high"
 QUALITY_SETTINGS = {
     "low": {
@@ -105,9 +110,15 @@ QUALITY_SETTINGS = {
 # WebRTC video codec/bitrate tuning.
 # Note: Your current `aiortc` version supports `VP8` and `H264` (not `VP9`).
 VIDEO_CODEC = os.getenv("VIDEO_CODEC", "h264").lower()  # "vp8" or "h264"
-VIDEO_BITRATE = int(os.getenv("VIDEO_BITRATE", "2000000"))  # bits per second
-VIDEO_BITRATE_MIN = int(os.getenv("VIDEO_BITRATE_MIN", "1000000"))
-VIDEO_BITRATE_MAX = int(os.getenv("VIDEO_BITRATE_MAX", "4000000"))
+VIDEO_BITRATE = int(os.getenv("VIDEO_BITRATE", "4500000"))  # bits per second
+VIDEO_BITRATE_MIN = int(os.getenv("VIDEO_BITRATE_MIN", "1800000"))
+VIDEO_BITRATE_MAX = int(os.getenv("VIDEO_BITRATE_MAX", "8000000"))
+
+# Capture-side resolution guardrail for smoother real-time streaming.
+# Useful when host desktop is 2K/4K and bandwidth/CPU are limited.
+# Set either value to 0 to disable that cap.
+CAPTURE_MAX_WIDTH = int(os.getenv("CAPTURE_MAX_WIDTH", "1920"))
+CAPTURE_MAX_HEIGHT = int(os.getenv("CAPTURE_MAX_HEIGHT", "1080"))
 
 # Data Channel Names
 CTRL_CHANNEL_NAME = "control"

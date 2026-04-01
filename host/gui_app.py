@@ -1,27 +1,70 @@
 import asyncio
+import multiprocessing
 import os
 import queue
 import random
 import string
+import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from typing import Optional
+from typing import Callable, Optional, Union
 
-import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common.config import SIGNALING_URL, setup_logging
-from host.webrtc_host import WebRTCHost
 
 
 def generate_host_id(length: int = 6) -> str:
     return "".join(random.choices(string.digits, k=length))
 
 
-class HostChatWindow:
-    """UltraViewer-like chat window launched from the main Tk UI."""
+def _webrtc_worker_main(
+    host_id: str,
+    emit: Callable[[tuple], None],
+    set_host: Optional[Callable[[object], None]] = None,
+) -> None:
+    from host.webrtc_host import WebRTCHost
 
+    async def run() -> None:
+        setup_logging()
+        try:
+            host = WebRTCHost(
+                host_id,
+                on_event=lambda msg: emit(("status", msg)),
+                on_chat=lambda sender, text: emit(("chat", sender, text)),
+                on_file_offer=lambda file_id, file_name, file_size: emit(
+                    ("file_offer", file_id, file_name, file_size)
+                ),
+                on_file_progress=lambda file_name, transferred, total, direction: emit(
+                    ("file_progress", file_name, transferred, total, direction)
+                ),
+                on_file_done=lambda file_name, path, direction: emit(("file_done", file_name, path, direction)),
+            )
+            if set_host:
+                set_host(host)
+            await host.run()
+        except PermissionError as e:
+            emit(("error", f"PERMISSION_ERROR: {e}"))
+        except Exception as e:
+            emit(("error", str(e)))
+        finally:
+            if set_host:
+                set_host(None)
+
+    try:
+        asyncio.run(run())
+    except Exception as e:
+        emit(("error", str(e)))
+    finally:
+        emit(("done",))
+
+
+def _darwin_host_process_entry(host_id: str, event_queue: multiprocessing.Queue) -> None:
+    _webrtc_worker_main(host_id, event_queue.put)
+
+
+class HostChatWindow:
     def __init__(self, parent: tk.Tk, send_chat_cb, send_file_cb) -> None:
         self._send_chat_cb = send_chat_cb
         self._send_file_cb = send_file_cb
@@ -89,10 +132,12 @@ class HostUI:
         self.root.title("Remote Host - Helpdesk")
         self.root.geometry("420x300")
 
-        self._ui_queue: "queue.Queue[tuple]" = queue.Queue()
+        self._ui_queue: Union[queue.Queue, multiprocessing.Queue] = queue.Queue()
         self._worker_thread: Optional[threading.Thread] = None
+        self._worker_proc: Optional[multiprocessing.Process] = None
         self._is_running = False
-        self._host: Optional[WebRTCHost] = None
+        self._use_child_process = sys.platform == "darwin"
+        self._host: Optional[object] = None
         self._chat_window: Optional[HostChatWindow] = None
         self._chat_backlog: list[tuple[str, str]] = []
 
@@ -169,40 +214,14 @@ class HostUI:
             self._chat_window.append_chat(sender, text)
         self._chat_backlog.clear()
 
-    def _emit_event(self, message: str) -> None:
-        self._ui_queue.put(("status", message))
+    def _emit_from_worker(self, payload: tuple) -> None:
+        self._ui_queue.put(payload)
 
-    def _emit_chat(self, sender: str, text: str) -> None:
-        self._ui_queue.put(("chat", sender, text))
+    def _set_host_ref(self, host_obj: object) -> None:
+        self._host = host_obj
 
-    def _emit_file_progress(self, file_name: str, transferred: int, total: int, direction: str) -> None:
-        self._ui_queue.put(("file_progress", file_name, transferred, total, direction))
-
-    def _emit_file_done(self, file_name: str, path: str, direction: str) -> None:
-        self._ui_queue.put(("file_done", file_name, path, direction))
-
-    def _on_file_offer(self, file_id: str, file_name: str, file_size: int) -> None:
-        self._ui_queue.put(("file_offer", file_id, file_name, file_size))
-
-    def _worker_main(self, host_id: str) -> None:
-        async def run() -> None:
-            setup_logging()
-            self._host = WebRTCHost(
-                host_id,
-                on_event=self._emit_event,
-                on_chat=self._emit_chat,
-                on_file_offer=self._on_file_offer,
-                on_file_progress=self._emit_file_progress,
-                on_file_done=self._emit_file_done,
-            )
-            await self._host.run()
-
-        try:
-            asyncio.run(run())
-        except Exception as e:
-            self._ui_queue.put(("error", str(e)))
-        finally:
-            self._ui_queue.put(("done",))
+    def _worker_main_thread(self, host_id: str) -> None:
+        _webrtc_worker_main(host_id, self._emit_from_worker, self._set_host_ref)
 
     def _start_host(self) -> None:
         if self._is_running:
@@ -213,10 +232,27 @@ class HostUI:
             return
         self._is_running = True
         self.status_var.set("Starting host...")
-        self._worker_thread = threading.Thread(target=self._worker_main, args=(host_id,), daemon=True)
-        self._worker_thread.start()
+
+        if self._use_child_process:
+            self._ui_queue = multiprocessing.Queue()
+            self._worker_proc = multiprocessing.Process(
+                target=_darwin_host_process_entry,
+                args=(host_id, self._ui_queue),
+                daemon=True,
+            )
+            self._worker_proc.start()
+        else:
+            self._worker_thread = threading.Thread(
+                target=self._worker_main_thread,
+                args=(host_id,),
+                daemon=True,
+            )
+            self._worker_thread.start()
 
     def _send_chat_text(self, text: str) -> None:
+        if self._use_child_process:
+            messagebox.showinfo("Unavailable", "Chat sending from host UI is unavailable in macOS process mode.")
+            return
         if not self._host:
             messagebox.showinfo("Not connected", "Start host and wait for client.")
             return
@@ -226,6 +262,9 @@ class HostUI:
             messagebox.showwarning("Chat send failed", str(e))
 
     def _send_file_path(self, path: str) -> None:
+        if self._use_child_process:
+            messagebox.showinfo("Unavailable", "File sending from host UI is unavailable in macOS process mode.")
+            return
         if not self._host:
             messagebox.showinfo("Not connected", "Start host and wait for client.")
             return
@@ -237,7 +276,16 @@ class HostUI:
     def _poll_ui_queue(self) -> None:
         try:
             while True:
-                kind, *rest = self._ui_queue.get_nowait()
+                payload = self._ui_queue.get_nowait()
+                if isinstance(payload, str):
+                    if payload == "__DONE__":
+                        payload = ("done",)
+                    elif payload.startswith("ERROR:"):
+                        payload = ("error", payload.replace("ERROR: ", ""))
+                    else:
+                        payload = ("status", payload)
+
+                kind, *rest = payload
                 if kind == "status":
                     msg = rest[0]
                     if msg == "SESSION_CONNECTED":
@@ -269,9 +317,15 @@ class HostUI:
                     if self._host:
                         self._host.respond_file_offer(file_id, save_path or None)
                 elif kind == "error":
-                    self.status_var.set(f"ERROR: {rest[0]}")
+                    msg = str(rest[0])
+                    if msg.startswith("PERMISSION_ERROR:"):
+                        self.status_var.set("Permission denied!")
+                        messagebox.showerror("macOS Permission Required", msg.replace("PERMISSION_ERROR: ", ""))
+                    else:
+                        self.status_var.set(f"ERROR: {msg}")
                 elif kind == "done":
                     self._is_running = False
+                    self._worker_proc = None
                     self.status_var.set("Host stopped.")
         except queue.Empty:
             pass
@@ -279,6 +333,9 @@ class HostUI:
         self.root.after(200, self._poll_ui_queue)
 
     def _on_close(self) -> None:
+        if self._worker_proc is not None and self._worker_proc.is_alive():
+            self._worker_proc.terminate()
+            self._worker_proc.join(timeout=3)
         self.root.destroy()
 
     def run(self) -> None:
@@ -286,5 +343,5 @@ class HostUI:
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     HostUI().run()
-
