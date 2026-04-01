@@ -90,7 +90,7 @@ class WebRTCHost:
                     self._cursor_handles[h] = WIN_CURSOR_NAME_MAP[cid]
         elif platform.system() == "Darwin":
             try:
-                from AppKit import NSCursor
+                from Cocoa import NSCursor
                 self._ns_cursor = NSCursor
             except ImportError:
                 self._ns_cursor = None
