@@ -107,15 +107,22 @@ Edit `common/config.py` or set environment variables before starting Host/Client
 - `VIDEO_BITRATE`: bits/sec (default: `2000000`)
 - `VIDEO_BITRATE_MIN`: encoder floor (default: `1000000`)
 - `VIDEO_BITRATE_MAX`: encoder ceiling (default: `4000000`)
-- `TARGET_FPS`: frame rate (default: `20`)
+- `TARGET_FPS`: frame rate (default: `24`)
 - `DEFAULT_QUALITY`: affects capture scaling (`low`=0.5, `medium`=0.75, `high`=1.0)
+- `CAPTURE_MAX_WIDTH`: host capture width cap (default: `1920`, set `0` to disable)
+- `CAPTURE_MAX_HEIGHT`: host capture height cap (default: `1080`, set `0` to disable)
 
 ### Recommended starting point
 If your connection is decent, try:
 
 - `VIDEO_CODEC=h264`
-- `VIDEO_BITRATE=3000000`
-- `TARGET_FPS=20`
+- `VIDEO_BITRATE=4500000`
+- `TARGET_FPS=24`
+
+For lag spikes while switching apps/windows, also prefer UDP relay:
+
+- `ICE_UDP_TURN_FIRST=1` (default now)
+- if your office network blocks UDP, fallback with `ICE_UDP_TURN_FIRST=0`
 
 Then restart both apps and evaluate sharpness/latency.
 

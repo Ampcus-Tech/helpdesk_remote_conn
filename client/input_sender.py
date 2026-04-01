@@ -59,6 +59,10 @@ class InputSender:
         self._focus_thread_stop = threading.Event()
         self._focus_thread = threading.Thread(target=self._focus_monitor_loop, daemon=True)
         self._focus_thread.start()
+        # Prevent mouse-move floods from delaying keyboard events on the same data channel.
+        self._last_mouse_move_sent_at = 0.0
+        self._mouse_move_interval = 1.0 / 90.0  # cap to ~90 Hz
+        self._mouse_buffer_drop_threshold = 48 * 1024  # bytes
         
         cv2.setMouseCallback(self.window_name, self._mouse_callback)
         
@@ -175,6 +179,14 @@ class InputSender:
         if event == cv2.EVENT_MOUSEMOVE:
             if self._enable_focus_gating and not is_foreground:
                 return
+            now = time.perf_counter()
+            if now - self._last_mouse_move_sent_at < self._mouse_move_interval:
+                return
+            # Backpressure: drop non-critical mouse-move packets if SCTP buffer grows.
+            # Keyboard/mouse-click events are still sent immediately.
+            if getattr(self.channel, "bufferedAmount", 0) > self._mouse_buffer_drop_threshold:
+                return
+            self._last_mouse_move_sent_at = now
             msg = ControlMessage(type=MessageType.MOUSE_MOVE, x=x, y=y, screen_width=self.screen_width, screen_height=self.screen_height)
         elif event == cv2.EVENT_LBUTTONDOWN:
             if self._enable_focus_gating and not is_foreground:
