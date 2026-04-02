@@ -485,6 +485,9 @@ class WebRTCClient:
                     asyncio.create_task(self._send_file_task(cmd["path"]))
                 elif kind == "respond_file_offer":
                     self.respond_file_offer(cmd["file_id"], cmd["save_path"])
+                elif kind == "set_input_forwarding":
+                    if self.input_sender:
+                        self.input_sender.set_input_forwarding(bool(cmd.get("enabled", True)))
                 elif kind == "shutdown":
                     break
                     

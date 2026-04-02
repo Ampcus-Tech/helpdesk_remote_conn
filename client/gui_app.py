@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import multiprocessing
+import platform
 import queue
 import sys
 import threading
@@ -56,8 +57,12 @@ class SideToggleButton:
         self.parent_ui = parent_ui
         self.on_click = on_click
         self.top = tk.Toplevel(parent_ui.root)
-        self.top.overrideredirect(True)
+        # Linux WMs often make overrideredirect popups hard to click/focus.
+        self._linux_mode = platform.system() == "Linux"
+        self.top.overrideredirect(not self._linux_mode)
         self.top.attributes("-topmost", True)
+        if self._linux_mode:
+            self.top.resizable(False, False)
         
         # Load blue arrow icon
         try:
@@ -74,6 +79,7 @@ class SideToggleButton:
         
         self.update_position()
         self.top.bind("<B1-Motion>", self._on_drag)
+        self.parent_ui.root.bind("<Configure>", lambda _e: self.update_position())
 
     def update_position(self):
         self.top.update_idletasks()
@@ -91,11 +97,13 @@ class SideToggleButton:
         self.top.geometry(f"35x60+{sw-40}+{max(0, y)}")
 
 class RemoteChatPanel:
-    def __init__(self, parent_ui, send_chat_cb, send_file_cb, respond_file_cb) -> None:
+    def __init__(self, parent_ui, send_chat_cb, send_file_cb, respond_file_cb, pause_input_cb, resume_input_cb) -> None:
         self.parent_ui = parent_ui
         self._send_chat_cb = send_chat_cb
         self._send_file_cb = send_file_cb
         self._respond_file_cb = respond_file_cb
+        self._pause_input_cb = pause_input_cb
+        self._resume_input_cb = resume_input_cb
 
         self.top = tk.Toplevel(parent_ui.root)
         self.top.title("Helpdesk Remote Access - Client")
@@ -131,6 +139,7 @@ class RemoteChatPanel:
         self.chat_input = tk.Entry(bottom, font=("Segoe UI", 10))
         self.chat_input.insert(0, "Press F1 to toggle chat on/off")
         self.chat_input.bind("<FocusIn>", self._on_focus_in)
+        self.chat_input.bind("<FocusOut>", self._on_focus_out)
         self.chat_input.pack(side="left", fill="x", expand=True)
         self.chat_input.bind("<Return>", lambda _e: self._send_chat())
 
@@ -156,8 +165,12 @@ class RemoteChatPanel:
         self.top.geometry(f"380x500+{sw-390}+{sh-550}")
 
     def _on_focus_in(self, event):
+        self._pause_input_cb()
         if self.chat_input.get() == "Press F1 to toggle chat on/off":
             self.chat_input.delete(0, "end")
+
+    def _on_focus_out(self, event):
+        self._resume_input_cb()
 
     def show(self):
         self.top.deiconify()
@@ -257,7 +270,7 @@ class ClientUI:
         self._last_worker_message: str = ""
         self._use_child_process = sys.platform == "darwin"
         self._client: Optional[WebRTCClient] = None
-        self._chat_panel: Optional[UltraChatPanel] = None
+        self._chat_panel: Optional[RemoteChatPanel] = None
         self._side_button: Optional[SideToggleButton] = None
         self._chat_backlog: list[tuple[str, str]] = []
 
@@ -296,6 +309,8 @@ class ClientUI:
                 send_chat_cb=self._send_chat_text,
                 send_file_cb=self._send_file_path,
                 respond_file_cb=self._respond_file_offer,
+                pause_input_cb=self._pause_remote_input,
+                resume_input_cb=self._resume_remote_input,
             )
             for sender, text in self._chat_backlog:
                 self._chat_panel.append_chat(sender, text)
@@ -390,6 +405,12 @@ class ClientUI:
 
     def _respond_file_offer(self, file_id: str, save_path: Optional[str]) -> None:
         self._command_queue.put({"type": "respond_file_offer", "file_id": file_id, "save_path": save_path})
+
+    def _pause_remote_input(self) -> None:
+        self._command_queue.put({"type": "set_input_forwarding", "enabled": False})
+
+    def _resume_remote_input(self) -> None:
+        self._command_queue.put({"type": "set_input_forwarding", "enabled": True})
 
     def _poll_ui_queue(self) -> None:
         try:
