@@ -87,10 +87,12 @@ class WebRTCHost:
         on_file_offer=None,
         on_file_progress=None,
         on_file_done=None,
+        command_queue=None,
     ):
         self.host_id = host_id
         self.pc = None
         self.ws = None
+        self.command_queue = command_queue
         self.input_receiver = InputReceiver()
         self.on_event = on_event
         self.on_chat = on_chat
@@ -125,6 +127,7 @@ class WebRTCHost:
         
         self._last_cursor_name = None
         self._cursor_task = None
+        self._command_task = None
 
     def _emit(self, message: str) -> None:
         """Send lightweight status updates to the UI (if provided)."""
@@ -510,12 +513,50 @@ class WebRTCHost:
                 )
                 await self.ws.send(ans_msg.to_json())
 
+    async def _process_commands(self):
+        """Poll the incoming command queue from the UI process."""
+        if not self.command_queue:
+            return
+        
+        while True:
+            try:
+                # Use a thread-safe way to check the queue in an async loop
+                if hasattr(self.command_queue, "empty") and self.command_queue.empty():
+                    await asyncio.sleep(0.1)
+                    continue
+                
+                # Get command without blocking the whole loop
+                cmd = await asyncio.get_event_loop().run_in_executor(None, self.command_queue.get)
+                if not cmd:
+                    continue
+                
+                kind = cmd.get("type")
+                if kind == "send_chat":
+                    self.send_chat(cmd["text"])
+                elif kind == "send_file":
+                    # Run file task concurrently
+                    asyncio.create_task(self._send_file_task(cmd["path"]))
+                elif kind == "respond_file_offer":
+                    self.respond_file_offer(cmd["file_id"], cmd["save_path"])
+                elif kind == "shutdown":
+                    break
+                    
+            except Exception as e:
+                logger.error(f"Error in command processing: {e}")
+                await asyncio.sleep(0.1)
+
     async def run(self):
+        self._command_task = asyncio.create_task(self._process_commands())
         try:
             await self.connect_signaling()
+            # Keep running until the command task (or signaling) ends
+            if self._command_task:
+                await self._command_task
         except asyncio.CancelledError:
             pass
         finally:
+            if self._command_task:
+                self._command_task.cancel()
             if self.pc:
                 await self.pc.close()
             if self.ws:

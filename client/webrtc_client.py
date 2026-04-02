@@ -41,14 +41,17 @@ class WebRTCClient:
         on_file_offer=None,
         on_file_progress=None,
         on_file_done=None,
+        command_queue=None,
     ):
         self.target_host_id = target_host_id
         self.pc = None
         self.ws = None
+        self.command_queue = command_queue
         self.channel = None
         self.chat_channel = None
         self.file_channel = None
         self.loop = None
+        self._command_task = None
         
         self.display = Display()
         self.input_sender = None
@@ -457,7 +460,40 @@ class WebRTCClient:
             if not self.connected_event.is_set():
                 self.connected_event.set()
 
+    async def _process_commands(self):
+        """Poll the incoming command queue from the UI process."""
+        if not self.command_queue:
+            return
+        
+        while True:
+            try:
+                # Use a thread-safe way to check the queue in an async loop
+                if hasattr(self.command_queue, "empty") and self.command_queue.empty():
+                    await asyncio.sleep(0.1)
+                    continue
+                
+                # Get command without blocking the whole loop
+                cmd = await asyncio.get_event_loop().run_in_executor(None, self.command_queue.get)
+                if not cmd:
+                    continue
+                
+                kind = cmd.get("type")
+                if kind == "send_chat":
+                    self.send_chat(cmd["text"])
+                elif kind == "send_file":
+                    # Run file task concurrently
+                    asyncio.create_task(self._send_file_task(cmd["path"]))
+                elif kind == "respond_file_offer":
+                    self.respond_file_offer(cmd["file_id"], cmd["save_path"])
+                elif kind == "shutdown":
+                    break
+                    
+            except Exception as e:
+                logger.error(f"Error in command processing: {e}")
+                await asyncio.sleep(0.1)
+
     async def run(self):
+        self._command_task = asyncio.create_task(self._process_commands())
         try:
             await self.start()
             if not self._handshake_ok:
@@ -467,6 +503,9 @@ class WebRTCClient:
             _client_print("Handshake OK — holding session until ICE closes or fails.")
             while self.pc and self.pc.iceConnectionState not in ("failed", "closed"):
                 await asyncio.sleep(0.25)
+                # Check command task health
+                if self._command_task and self._command_task.done():
+                    break
 
             final = self.pc.iceConnectionState if self.pc else "gone"
             summary = f"Session ended (ICE: {final})."
@@ -480,6 +519,8 @@ class WebRTCClient:
             _client_print(f"Fatal: {type(e).__name__}: {e}")
             self._emit(f"ERROR: {type(e).__name__}: {e}")
         finally:
+            if self._command_task:
+                self._command_task.cancel()
             if self.input_sender:
                 self.input_sender.close()
             if self.pc:

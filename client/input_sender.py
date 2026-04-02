@@ -398,11 +398,15 @@ class InputSender:
         triggering on the client PC while controlling the host.
         """
         last_should_run = None
-        while not self._focus_thread_stop.is_set():
+        while self._focus_thread_stop and not self._focus_thread_stop.is_set():
             try:
                 should_run = True
                 if self._enable_focus_gating:
                     should_run = self._is_target_window_foreground()
+                
+                # If we are shutting down, don't run!
+                if self._focus_thread_stop.is_set():
+                    break
 
                 if should_run != last_should_run:
                     self._ensure_keyboard_listener(should_run)
@@ -521,16 +525,18 @@ class InputSender:
     def close(self):
         if self._focus_thread_stop:
             self._focus_thread_stop.set()
-            self._focus_thread_stop = None
         if self._focus_thread:
             try:
                 self._focus_thread.join(timeout=0.5)
             except Exception:
                 pass
             self._focus_thread = None
+        self._focus_thread_stop = None
         if self._keyboard_listener:
-            self._keyboard_listener.stop()
-            self._keyboard_listener = None
+            try: self._keyboard_listener.stop()
+            except: pass
+            finally: self._keyboard_listener = None
         if self._mouse_listener:
-            self._mouse_listener.stop()
-            self._mouse_listener = None
+            try: self._mouse_listener.stop()
+            except: pass
+            finally: self._mouse_listener = None
