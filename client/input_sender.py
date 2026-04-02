@@ -21,7 +21,6 @@ class InputSender:
         self._pressed_keys = set()
         self._pressed_mouse_buttons = set()
         self._enable_focus_gating = True
-        self._input_forwarding_enabled = True
   
         # Cross-platform cursor handling. Initialize with default arrow.
         self._current_cursor_obj = None
@@ -169,8 +168,6 @@ class InputSender:
     def _mouse_callback(self, event, x, y, flags, param):
         if not self.channel or self.channel.readyState != "open":
             return
-        if not self._input_forwarding_enabled:
-            return
 
         # Synchronize local cursor with the remote host's current shape.
         self._apply_cursor()
@@ -275,22 +272,23 @@ class InputSender:
             name = str(key).replace("Key.", "")
             # Normalize common aliases for better cross-platform compatibility.
             aliases = {
+                # Canonicalize modifier variants to avoid stuck key state across platforms.
                 "ctrl": "ctrl",
-                "ctrl_l": "ctrl_l",
-                "ctrl_r": "ctrl_r",
+                "ctrl_l": "ctrl",
+                "ctrl_r": "ctrl",
                 "alt": "alt",
-                "alt_l": "alt_l",
-                "alt_r": "alt_r",
-                "alt_gr": "alt_gr",
+                "alt_l": "alt",
+                "alt_r": "alt",
+                "alt_gr": "alt",
                 "shift": "shift",
-                "shift_l": "shift_l",
-                "shift_r": "shift_r",
+                "shift_l": "shift",
+                "shift_r": "shift",
                 "cmd": "cmd",
-                "cmd_l": "cmd_l",
-                "cmd_r": "cmd_r",
+                "cmd_l": "cmd",
+                "cmd_r": "cmd",
                 "super": "cmd",
-                "super_l": "cmd_l",
-                "super_r": "cmd_r",
+                "super_l": "cmd",
+                "super_r": "cmd",
                 "esc": "esc",
                 "space": "space",
                 "tab": "tab",
@@ -403,8 +401,8 @@ class InputSender:
         last_should_run = None
         while self._focus_thread_stop and not self._focus_thread_stop.is_set():
             try:
-                should_run = self._input_forwarding_enabled
-                if should_run and self._enable_focus_gating:
+                should_run = True
+                if self._enable_focus_gating:
                     should_run = self._is_target_window_foreground()
                 
                 # If we are shutting down, don't run!
@@ -465,8 +463,6 @@ class InputSender:
 
     def _on_key_press(self, key):
         try:
-            if not self._input_forwarding_enabled:
-                return
             # Focus is handled by the focus monitor starting/stopping the listener.
             key_name = self._normalize_key(key)
             if not key_name:
@@ -479,8 +475,6 @@ class InputSender:
             logger.error(f"Keyboard press handling error: {e}") 
     def _on_key_release(self, key):
         try:
-            if not self._input_forwarding_enabled:
-                return
             key_name = self._normalize_key(key)
             if not key_name:
                 return
@@ -528,12 +522,6 @@ class InputSender:
                     self._apply_cursor()
                 except Exception:
                     pass
-
-    def set_input_forwarding(self, enabled: bool) -> None:
-        self._input_forwarding_enabled = bool(enabled)
-        if not self._input_forwarding_enabled:
-            self._release_all_pressed_keys_threadsafe()
-            self._ensure_keyboard_listener(False)
 
     def close(self):
         if self._focus_thread_stop:
