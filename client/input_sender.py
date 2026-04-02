@@ -25,6 +25,11 @@ class InputSender:
         # Cross-platform cursor handling. Initialize with default arrow.
         self._current_cursor_obj = None
         self._ns_cursor = None
+        self._linux_cursor_name = "left_ptr"
+        self._x_display = None
+        self._x_window = None
+        self._x11 = None
+        self._xcursor = None
         
         if platform.system() == "Windows" and hasattr(ctypes, "windll"):
             self._current_cursor_obj = ctypes.windll.user32.LoadCursorW(0, 32512)  # IDC_ARROW
@@ -35,6 +40,44 @@ class InputSender:
                 self._current_cursor_obj = NSCursor.arrowCursor()
             except ImportError:
                 pass
+        elif platform.system() == "Linux":
+            try:
+                self._x11 = ctypes.CDLL("libX11.so.6")
+                self._xcursor = ctypes.CDLL("libXcursor.so.1")
+                self._x11.XOpenDisplay.restype = ctypes.c_void_p
+                self._x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+                self._x11.XDefaultRootWindow.restype = ctypes.c_ulong
+                self._x11.XDefaultRootWindow.argtypes = [ctypes.c_void_p]
+                self._x11.XQueryTree.restype = ctypes.c_int
+                self._x11.XQueryTree.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.c_ulong,
+                    ctypes.POINTER(ctypes.c_ulong),
+                    ctypes.POINTER(ctypes.c_ulong),
+                    ctypes.POINTER(ctypes.POINTER(ctypes.c_ulong)),
+                    ctypes.POINTER(ctypes.c_uint),
+                ]
+                self._x11.XFetchName.restype = ctypes.c_int
+                self._x11.XFetchName.argtypes = [
+                    ctypes.c_void_p,
+                    ctypes.c_ulong,
+                    ctypes.POINTER(ctypes.c_char_p),
+                ]
+                self._x11.XFree.restype = ctypes.c_int
+                self._x11.XFree.argtypes = [ctypes.c_void_p]
+                self._x11.XDefineCursor.restype = ctypes.c_int
+                self._x11.XDefineCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_ulong]
+                self._x11.XFlush.restype = ctypes.c_int
+                self._x11.XFlush.argtypes = [ctypes.c_void_p]
+                self._x11.XCloseDisplay.restype = ctypes.c_int
+                self._x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+                self._xcursor.XcursorLibraryLoadCursor.restype = ctypes.c_ulong
+                self._xcursor.XcursorLibraryLoadCursor.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+                self._x_display = self._x11.XOpenDisplay(None)
+            except Exception:
+                self._x11 = None
+                self._xcursor = None
+                self._x_display = None
 
         if self.channel:
             @self.channel.on("message")
@@ -154,7 +197,8 @@ class InputSender:
     def _apply_cursor(self):
         """Apply the currently selected cursor shape to the local window."""
         if not self._current_cursor_obj:
-            return
+            if platform.system() != "Linux":
+                return
             
         sys_platform = platform.system()
         if sys_platform == "Windows" and hasattr(ctypes, "windll"):
@@ -164,6 +208,78 @@ class InputSender:
                 self._current_cursor_obj.set()
             except Exception:
                 pass
+        elif sys_platform == "Linux":
+            self._apply_linux_cursor()
+
+    def _find_window_by_title(self, root_window: int, expected_title: str):
+        """DFS over X11 window tree and return the first window with matching title."""
+        root_ret = ctypes.c_ulong()
+        parent_ret = ctypes.c_ulong()
+        children = ctypes.POINTER(ctypes.c_ulong)()
+        nchildren = ctypes.c_uint(0)
+
+        try:
+            ok = self._x11.XQueryTree(
+                self._x_display,
+                ctypes.c_ulong(root_window),
+                ctypes.byref(root_ret),
+                ctypes.byref(parent_ret),
+                ctypes.byref(children),
+                ctypes.byref(nchildren),
+            )
+            if not ok:
+                return None
+
+            for i in range(int(nchildren.value)):
+                child = int(children[i])
+                name_ptr = ctypes.c_char_p()
+                fetched = self._x11.XFetchName(
+                    self._x_display,
+                    ctypes.c_ulong(child),
+                    ctypes.byref(name_ptr),
+                )
+                if fetched and name_ptr.value:
+                    title = name_ptr.value.decode("utf-8", errors="ignore").strip()
+                    self._x11.XFree(name_ptr)
+                    if expected_title and expected_title in title:
+                        return child
+                found = self._find_window_by_title(child, expected_title)
+                if found:
+                    return found
+            return None
+        finally:
+            if children:
+                self._x11.XFree(children)
+
+    def _resolve_linux_window(self):
+        if not self._x11 or not self._x_display:
+            return None
+        if self._x_window:
+            return self._x_window
+        try:
+            root = self._x11.XDefaultRootWindow(self._x_display)
+            found = self._find_window_by_title(root, str(self.window_name).strip())
+            if found:
+                self._x_window = found
+            return self._x_window
+        except Exception:
+            return None
+
+    def _apply_linux_cursor(self):
+        if not self._x11 or not self._xcursor or not self._x_display:
+            return
+        try:
+            win = self._resolve_linux_window()
+            if not win:
+                return
+            cursor = self._xcursor.XcursorLibraryLoadCursor(
+                self._x_display, self._linux_cursor_name.encode("utf-8")
+            )
+            if cursor:
+                self._x11.XDefineCursor(self._x_display, ctypes.c_ulong(win), ctypes.c_ulong(cursor))
+                self._x11.XFlush(self._x_display)
+        except Exception:
+            pass
 
     def _mouse_callback(self, event, x, y, flags, param):
         if not self.channel or self.channel.readyState != "open":
@@ -272,23 +388,22 @@ class InputSender:
             name = str(key).replace("Key.", "")
             # Normalize common aliases for better cross-platform compatibility.
             aliases = {
-                # Canonicalize modifier variants to avoid stuck key state across platforms.
                 "ctrl": "ctrl",
-                "ctrl_l": "ctrl",
-                "ctrl_r": "ctrl",
+                "ctrl_l": "ctrl_l",
+                "ctrl_r": "ctrl_r",
                 "alt": "alt",
-                "alt_l": "alt",
-                "alt_r": "alt",
-                "alt_gr": "alt",
+                "alt_l": "alt_l",
+                "alt_r": "alt_r",
+                "alt_gr": "alt_gr",
                 "shift": "shift",
-                "shift_l": "shift",
-                "shift_r": "shift",
+                "shift_l": "shift_l",
+                "shift_r": "shift_r",
                 "cmd": "cmd",
-                "cmd_l": "cmd",
-                "cmd_r": "cmd",
+                "cmd_l": "cmd_l",
+                "cmd_r": "cmd_r",
                 "super": "cmd",
-                "super_l": "cmd",
-                "super_r": "cmd",
+                "super_l": "cmd_l",
+                "super_r": "cmd_r",
                 "esc": "esc",
                 "space": "space",
                 "tab": "tab",
@@ -522,6 +637,26 @@ class InputSender:
                     self._apply_cursor()
                 except Exception:
                     pass
+        elif sys_platform == "Linux":
+            # Map standardized names to common Xcursor theme names.
+            mapping = {
+                "arrow": "left_ptr",
+                "ibeam": "xterm",
+                "wait": "watch",
+                "crosshair": "crosshair",
+                "hand": "hand2",
+                "size_all": "fleur",
+                "size_we": "sb_h_double_arrow",
+                "size_ns": "sb_v_double_arrow",
+                "size_nwse": "bd_double_arrow",
+                "size_nesw": "fd_double_arrow",
+                "uparrow": "sb_up_arrow",
+                "no": "not-allowed",
+                "appstarting": "left_ptr_watch",
+                "help": "question_arrow",
+            }
+            self._linux_cursor_name = mapping.get(cursor_name, "left_ptr")
+            self._apply_cursor()
 
     def close(self):
         if self._focus_thread_stop:
@@ -541,3 +676,10 @@ class InputSender:
             try: self._mouse_listener.stop()
             except: pass
             finally: self._mouse_listener = None
+        if self._x11 and self._x_display:
+            try:
+                self._x11.XCloseDisplay(self._x_display)
+            except Exception:
+                pass
+            finally:
+                self._x_display = None
