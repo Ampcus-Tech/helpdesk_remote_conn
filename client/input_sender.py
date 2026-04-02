@@ -26,10 +26,13 @@ class InputSender:
         self._current_cursor_obj = None
         self._ns_cursor = None
         self._linux_cursor_name = "left_ptr"
+        self._linux_cursor_names = ["left_ptr"]
+        self._linux_font_cursor_shape = 68  # XC_left_ptr
         self._x_display = None
         self._x_window = None
         self._x11 = None
         self._xcursor = None
+        self._x_cursor_handle = None
         
         if platform.system() == "Windows" and hasattr(ctypes, "windll"):
             self._current_cursor_obj = ctypes.windll.user32.LoadCursorW(0, 32512)  # IDC_ARROW
@@ -71,6 +74,10 @@ class InputSender:
                 self._x11.XFlush.argtypes = [ctypes.c_void_p]
                 self._x11.XCloseDisplay.restype = ctypes.c_int
                 self._x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+                self._x11.XCreateFontCursor.restype = ctypes.c_ulong
+                self._x11.XCreateFontCursor.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+                self._x11.XFreeCursor.restype = ctypes.c_int
+                self._x11.XFreeCursor.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
                 self._xcursor.XcursorLibraryLoadCursor.restype = ctypes.c_ulong
                 self._xcursor.XcursorLibraryLoadCursor.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
                 self._x_display = self._x11.XOpenDisplay(None)
@@ -272,10 +279,24 @@ class InputSender:
             win = self._resolve_linux_window()
             if not win:
                 return
-            cursor = self._xcursor.XcursorLibraryLoadCursor(
-                self._x_display, self._linux_cursor_name.encode("utf-8")
-            )
+            cursor = 0
+            for cname in self._linux_cursor_names:
+                cursor = self._xcursor.XcursorLibraryLoadCursor(
+                    self._x_display, cname.encode("utf-8")
+                )
+                if cursor:
+                    break
+            if not cursor:
+                cursor = self._x11.XCreateFontCursor(
+                    self._x_display, ctypes.c_uint(self._linux_font_cursor_shape)
+                )
             if cursor:
+                if self._x_cursor_handle:
+                    try:
+                        self._x11.XFreeCursor(self._x_display, ctypes.c_ulong(self._x_cursor_handle))
+                    except Exception:
+                        pass
+                self._x_cursor_handle = int(cursor)
                 self._x11.XDefineCursor(self._x_display, ctypes.c_ulong(win), ctypes.c_ulong(cursor))
                 self._x11.XFlush(self._x_display)
         except Exception:
@@ -638,24 +659,28 @@ class InputSender:
                 except Exception:
                     pass
         elif sys_platform == "Linux":
-            # Map standardized names to common Xcursor theme names.
+            # Map standardized names to Xcursor aliases + X11 font-cursor fallback.
+            # Font cursor ids (cursorfont.h): left_ptr=68, xterm=152, watch=150, etc.
             mapping = {
-                "arrow": "left_ptr",
-                "ibeam": "xterm",
-                "wait": "watch",
-                "crosshair": "crosshair",
-                "hand": "hand2",
-                "size_all": "fleur",
-                "size_we": "sb_h_double_arrow",
-                "size_ns": "sb_v_double_arrow",
-                "size_nwse": "bd_double_arrow",
-                "size_nesw": "fd_double_arrow",
-                "uparrow": "sb_up_arrow",
-                "no": "not-allowed",
-                "appstarting": "left_ptr_watch",
-                "help": "question_arrow",
+                "arrow": (["left_ptr", "default"], 68),
+                "ibeam": (["text", "xterm", "ibeam"], 152),
+                "wait": (["wait", "watch"], 150),
+                "crosshair": (["crosshair", "tcross"], 34),
+                "hand": (["pointer", "hand2", "hand1"], 60),
+                "size_all": (["fleur", "move"], 52),
+                "size_we": (["ew-resize", "sb_h_double_arrow", "size_hor"], 108),
+                "size_ns": (["ns-resize", "sb_v_double_arrow", "size_ver"], 116),
+                "size_nwse": (["nwse-resize", "bd_double_arrow"], 14),
+                "size_nesw": (["nesw-resize", "fd_double_arrow"], 12),
+                "uparrow": (["up-arrow", "sb_up_arrow"], 114),
+                "no": (["not-allowed", "crossed_circle"], 0),
+                "appstarting": (["left_ptr_watch", "progress"], 150),
+                "help": (["help", "question_arrow"], 92),
             }
-            self._linux_cursor_name = mapping.get(cursor_name, "left_ptr")
+            aliases, font_shape = mapping.get(cursor_name, (["left_ptr", "default"], 68))
+            self._linux_cursor_names = aliases
+            self._linux_cursor_name = aliases[0]
+            self._linux_font_cursor_shape = font_shape
             self._apply_cursor()
 
     def close(self):
@@ -678,6 +703,9 @@ class InputSender:
             finally: self._mouse_listener = None
         if self._x11 and self._x_display:
             try:
+                if self._x_cursor_handle:
+                    self._x11.XFreeCursor(self._x_display, ctypes.c_ulong(self._x_cursor_handle))
+                    self._x_cursor_handle = None
                 self._x11.XCloseDisplay(self._x_display)
             except Exception:
                 pass
