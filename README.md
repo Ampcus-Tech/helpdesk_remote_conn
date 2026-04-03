@@ -1,12 +1,13 @@
 # Remote Desktop App
 
-A Python-based remote desktop application using WebRTC (`aiortc`), WebSockets for signaling, `mss` for screen capture, OpenCV for display and frame processing, `pynput` for remote input control, and PyQt6 for Host/Client UI panels.
+A Python-based remote desktop core (WebRTC via `aiortc`, WebSocket signaling, `mss` + OpenCV on the host for capture/processing, `pynput` for input injection) plus a **Tauri + React** viewer for low-latency playback (native `<video>` / hardware decoding instead of OpenCV `imshow` on the viewer).
 
 ## Project Structure
 
-- `signaling/`: WebSocket server for SDP and ICE relay.
-- `host/`: Host application capturing the screen and receiving input.
-- `client/`: Client application displaying the screen and generating input.
+- `signaling/`: WebSocket server for SDP relay.
+- `host/`: Host application capturing the screen and receiving input (Python).
+- `client/`: Legacy Python viewer (`webrtc_client` + Tk/OpenCV window) — still available.
+- `desktop-client/`: **Recommended viewer** — Tauri shell + React UI + browser WebRTC (same signaling + data-channel protocol as the Python client).
 - `common/`: Shared config, message structs, and utils.
 
 ## Installation
@@ -39,12 +40,28 @@ python host/main.py
 ```
 This will output a 6-digit Host ID (e.g., `123456`). Keep this window open.
 
-### 3. Start the Client Application
-On the computer you are using as a viewer:vgdf
+### 3. Start the Client (Tauri + React viewer, recommended)
+
+Prerequisites: [Node.js](https://nodejs.org/), [Rust](https://www.rust-lang.org/tools/install) (for Tauri), same signaling URL and STUN/TURN settings as `common/config.py`.
+
+```bash
+cd desktop-client
+copy .env.example .env
+# Edit .env: set VITE_SIGNALING_URL (and VITE_ICE_SERVERS_JSON if you use TURN — must match host/client ICE).
+npm install
+npm run tauri dev
+```
+
+Enter the host ID in the UI and connect. Production build: `npm run tauri build`.
+
+### 3b. Python viewer (legacy)
+
 ```bash
 python client/main.py
 ```
-When prompted, enter the 6-digit Host ID. Or pass it as an argument:
+
+When prompted, enter the 6-digit Host ID, or pass it as an argument:
+
 ```bash
 python client/main.py 123456
 ```
