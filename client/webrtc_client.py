@@ -371,10 +371,17 @@ class WebRTCClient:
         
         offer = await self.pc.createOffer()
         await self.pc.setLocalDescription(offer)
-        # setLocalDescription runs ICE gather and embeds candidates; createOffer() SDP alone is incomplete.
+        
+        # Wait for ICE gathering to complete before sending the offer
+        # This ensures candidates (including TURN relay) are included in the SDP.
+        _client_print("Gathering ICE candidates...")
+        self._emit("Gathering ICE candidates...")
+        while self.pc.iceGatheringState != "complete":
+            await asyncio.sleep(0.1)
+            
         local = self.pc.localDescription
         if local is None:
-            raise RuntimeError("Missing localDescription after setLocalDescription")
+            raise RuntimeError("Missing localDescription after gathering")
         
         asyncio.create_task(self._signaling_loop(local))
         

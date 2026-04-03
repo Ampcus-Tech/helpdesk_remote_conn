@@ -507,6 +507,13 @@ class WebRTCHost:
                 answer = await self.pc.createAnswer()
                 await self.pc.setLocalDescription(answer)
                 
+                # Wait for ICE gathering to complete before sending the answer
+                # This ensures candidates (including TURN relay) are included in the SDP.
+                logger.info("Gathering ICE candidates...")
+                self._emit("Gathering ICE candidates...")
+                while self.pc.iceGatheringState != "complete":
+                    await asyncio.sleep(0.1)
+                
                 ans_msg = SignalingMessage(
                     type=MessageType.SDP,
                     sdp={"sdp": self.pc.localDescription.sdp, "type": self.pc.localDescription.type}

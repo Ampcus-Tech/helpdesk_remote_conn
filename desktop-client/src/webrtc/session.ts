@@ -28,6 +28,25 @@ const CTRL = "control";
 const CHAT = "chat";
 const FILE = "file";
 
+async function waitForIceGatheringComplete(pc: RTCPeerConnection, timeoutMs = 15000): Promise<void> {
+  if (pc.iceGatheringState === "complete") return;
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      pc.removeEventListener("icegatheringstatechange", onStateChange);
+      window.clearTimeout(timer);
+      resolve();
+    };
+    const onStateChange = () => {
+      if (pc.iceGatheringState === "complete") finish();
+    };
+    const timer = window.setTimeout(finish, timeoutMs);
+    pc.addEventListener("icegatheringstatechange", onStateChange);
+  });
+}
+
 function defaultIceServers(): RTCIceServer[] {
   return [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
 }
@@ -155,6 +174,8 @@ export async function startSession(hostId: string, handlers: SessionHandlers): P
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
+  handlers.onStatus("Gathering ICE candidates...");
+  await waitForIceGatheringComplete(pc);
   const local = pc.localDescription;
   if (!local?.sdp) throw new Error("Missing local SDP");
 
