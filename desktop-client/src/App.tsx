@@ -47,10 +47,31 @@ export default function App() {
   const chatRef = useRef<RTCDataChannel | null>(null);
   const lastMoveAt = useRef(0);
   const buttonsDown = useRef<Set<"left" | "right">>(new Set());
+  const pressedKeys = useRef<Set<string>>(new Set());
+  const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  const moveTimer = useRef<number | null>(null);
+  const moveArmed = useRef(false);
 
   const cursorStyle = useMemo(() => CURSOR_CSS[cursorName] || "default", [cursorName]);
 
+  const releaseAllKeys = useCallback(() => {
+    const fn = ctrlSendRef.current;
+    if (!fn) return;
+    if (pressedKeys.current.size === 0) return;
+    for (const k of Array.from(pressedKeys.current)) {
+      fn(JSON.stringify({ type: MessageType.KEYBOARD, key: k, pressed: false }));
+    }
+    pressedKeys.current.clear();
+  }, []);
+
   const disconnect = useCallback(() => {
+    releaseAllKeys();
+    if (moveTimer.current != null) {
+      window.clearTimeout(moveTimer.current);
+      moveTimer.current = null;
+    }
+    moveArmed.current = false;
+    lastPointer.current = null;
     sessionRef.current?.close();
     sessionRef.current = null;
     ctrlSendRef.current = null;
@@ -63,7 +84,7 @@ export default function App() {
     setSessionAlive(false);
     setConnecting(false);
     setStatus("Disconnected");
-  }, []);
+  }, [releaseAllKeys]);
 
   const appendChat = useCallback((who: string, text: string) => {
     setChatLines((prev) => [...prev, { who, text }]);
@@ -129,6 +150,25 @@ export default function App() {
   };
 
   useEffect(() => {
+    const onBlur = () => releaseAllKeys();
+    const onVis = () => {
+      if (document.visibilityState !== "visible") releaseAllKeys();
+    };
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [releaseAllKeys]);
+
+  useEffect(() => {
+    return () => {
+      if (moveTimer.current != null) window.clearTimeout(moveTimer.current);
+    };
+  }, []);
+
+  useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
@@ -160,28 +200,62 @@ export default function App() {
     return () => el.removeEventListener("wheel", onWheel);
   }, [sessionAlive]);
 
-  const onMouseMove = (e: React.MouseEvent) => {
-    const video = videoRef.current;
-    const ch = sessionRef.current?.channels.ctrl;
-    if (!video || !ctrlSendRef.current || !ch) return;
-    const now = performance.now();
-    if (now - lastMoveAt.current < MOUSE_MOVE_INTERVAL_MS) return;
-    if (ch.bufferedAmount > DC_BUFFER_CAP) return;
-    lastMoveAt.current = now;
+  const onPointerMove = (e: React.PointerEvent) => {
+    // Coalesce mouse-move to avoid queuing delays on the ordered control channel.
+    lastPointer.current = { x: e.clientX, y: e.clientY };
+    if (moveArmed.current) return;
+    moveArmed.current = true;
 
-    const mapped = pointerToVideoFrame(e.clientX, e.clientY, video);
-    if (!mapped) return;
+    const tick = () => {
+      moveArmed.current = false;
+      moveTimer.current = null;
 
-    sendCtrl({
-      type: MessageType.MOUSE_MOVE,
-      x: mapped.x,
-      y: mapped.y,
-      screen_width: mapped.screen_width,
-      screen_height: mapped.screen_height,
-    });
+      const video = videoRef.current;
+      const ch = sessionRef.current?.channels.ctrl;
+      const fn = ctrlSendRef.current;
+      const pt = lastPointer.current;
+      if (!video || !ch || !fn || !pt) return;
+
+      const now = performance.now();
+      if (now - lastMoveAt.current < MOUSE_MOVE_INTERVAL_MS) {
+        moveTimer.current = window.setTimeout(tick, Math.max(0, MOUSE_MOVE_INTERVAL_MS - (now - lastMoveAt.current)));
+        moveArmed.current = true;
+        return;
+      }
+
+      // Backpressure: if SCTP buffer has grown, drop moves until it drains.
+      if (ch.bufferedAmount > DC_BUFFER_CAP) {
+        moveTimer.current = window.setTimeout(tick, 16);
+        moveArmed.current = true;
+        return;
+      }
+
+      const mapped = pointerToVideoFrame(pt.x, pt.y, video);
+      if (!mapped) return;
+      lastMoveAt.current = now;
+      fn(
+        JSON.stringify({
+          type: MessageType.MOUSE_MOVE,
+          x: mapped.x,
+          y: mapped.y,
+          screen_width: mapped.screen_width,
+          screen_height: mapped.screen_height,
+        }),
+      );
+    };
+
+    moveTimer.current = window.setTimeout(tick, 0);
   };
 
-  const onMouseDown = (e: React.MouseEvent) => {
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    el.focus();
+    try {
+      el.setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+
     const video = videoRef.current;
     if (!video || !ctrlSendRef.current) return;
     const mapped = pointerToVideoFrame(e.clientX, e.clientY, video);
@@ -189,39 +263,35 @@ export default function App() {
 
     if (e.button === 0) {
       buttonsDown.current.add("left");
-      sendCtrl({
-        type: MessageType.MOUSE_CLICK,
-        button: "left",
-        pressed: true,
-      });
+      sendCtrl({ type: MessageType.MOUSE_CLICK, button: "left", pressed: true });
     } else if (e.button === 2) {
       e.preventDefault();
       buttonsDown.current.add("right");
-      sendCtrl({
-        type: MessageType.MOUSE_CLICK,
-        button: "right",
-        pressed: true,
-      });
+      sendCtrl({ type: MessageType.MOUSE_CLICK, button: "right", pressed: true });
     }
   };
 
-  const onMouseUp = (e: React.MouseEvent) => {
+  const onPointerUp = (e: React.PointerEvent) => {
     if (!ctrlSendRef.current) return;
     if (e.button === 0 && buttonsDown.current.has("left")) {
       buttonsDown.current.delete("left");
-      sendCtrl({
-        type: MessageType.MOUSE_CLICK,
-        button: "left",
-        pressed: false,
-      });
+      sendCtrl({ type: MessageType.MOUSE_CLICK, button: "left", pressed: false });
     } else if (e.button === 2 && buttonsDown.current.has("right")) {
       e.preventDefault();
       buttonsDown.current.delete("right");
-      sendCtrl({
-        type: MessageType.MOUSE_CLICK,
-        button: "right",
-        pressed: false,
-      });
+      sendCtrl({ type: MessageType.MOUSE_CLICK, button: "right", pressed: false });
+    }
+  };
+
+  const onPointerCancel = () => {
+    if (!ctrlSendRef.current) return;
+    if (buttonsDown.current.has("left")) {
+      buttonsDown.current.delete("left");
+      sendCtrl({ type: MessageType.MOUSE_CLICK, button: "left", pressed: false });
+    }
+    if (buttonsDown.current.has("right")) {
+      buttonsDown.current.delete("right");
+      sendCtrl({ type: MessageType.MOUSE_CLICK, button: "right", pressed: false });
     }
   };
 
@@ -242,11 +312,9 @@ export default function App() {
     const mk = mapKeyboardEvent(e.nativeEvent);
     if (!mk) return;
     e.preventDefault();
-    sendCtrl({
-      type: MessageType.KEYBOARD,
-      key: mk.key,
-      pressed: mk.pressed,
-    });
+    if (mk.pressed) pressedKeys.current.add(mk.key);
+    else pressedKeys.current.delete(mk.key);
+    sendCtrl({ type: MessageType.KEYBOARD, key: mk.key, pressed: mk.pressed });
   };
 
   const sendChatNow = () => {
@@ -287,12 +355,14 @@ export default function App() {
           className="video-wrap"
           tabIndex={0}
           style={{ cursor: cursorStyle }}
-          onMouseMove={onMouseMove}
-          onMouseDown={onMouseDown}
-          onMouseUp={onMouseUp}
+          onPointerMove={onPointerMove}
+          onPointerDown={onPointerDown}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerCancel}
           onDoubleClick={onDoubleClick}
           onKeyDown={onKey}
           onKeyUp={onKey}
+          onBlur={() => releaseAllKeys()}
           onContextMenu={(e) => e.preventDefault()}
         >
           <video ref={videoRef} playsInline autoPlay muted />
