@@ -372,14 +372,9 @@ export default function App() {
           onPointerDown={onPointerDown}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerCancel}
-          onPointerMove={onPointerMove}
-          onPointerDown={onPointerDown}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerCancel}
           onDoubleClick={onDoubleClick}
           onKeyDown={onKey}
           onKeyUp={onKey}
-          onBlur={() => releaseAllKeys()}
           onBlur={() => releaseAllKeys()}
           onContextMenu={(e) => e.preventDefault()}
         >
