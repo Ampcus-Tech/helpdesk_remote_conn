@@ -72,6 +72,13 @@ export default function App() {
     }
     moveArmed.current = false;
     lastPointer.current = null;
+    releaseAllKeys();
+    if (moveTimer.current != null) {
+      window.clearTimeout(moveTimer.current);
+      moveTimer.current = null;
+    }
+    moveArmed.current = false;
+    lastPointer.current = null;
     sessionRef.current?.close();
     sessionRef.current = null;
     ctrlSendRef.current = null;
@@ -264,9 +271,11 @@ export default function App() {
     if (e.button === 0) {
       buttonsDown.current.add("left");
       sendCtrl({ type: MessageType.MOUSE_CLICK, button: "left", pressed: true });
+      sendCtrl({ type: MessageType.MOUSE_CLICK, button: "left", pressed: true });
     } else if (e.button === 2) {
       e.preventDefault();
       buttonsDown.current.add("right");
+      sendCtrl({ type: MessageType.MOUSE_CLICK, button: "right", pressed: true });
       sendCtrl({ type: MessageType.MOUSE_CLICK, button: "right", pressed: true });
     }
   };
@@ -275,6 +284,7 @@ export default function App() {
     if (!ctrlSendRef.current) return;
     if (e.button === 0 && buttonsDown.current.has("left")) {
       buttonsDown.current.delete("left");
+      sendCtrl({ type: MessageType.MOUSE_CLICK, button: "left", pressed: false });
       sendCtrl({ type: MessageType.MOUSE_CLICK, button: "left", pressed: false });
     } else if (e.button === 2 && buttonsDown.current.has("right")) {
       e.preventDefault();
@@ -312,6 +322,9 @@ export default function App() {
     const mk = mapKeyboardEvent(e.nativeEvent);
     if (!mk) return;
     e.preventDefault();
+    if (mk.pressed) pressedKeys.current.add(mk.key);
+    else pressedKeys.current.delete(mk.key);
+    sendCtrl({ type: MessageType.KEYBOARD, key: mk.key, pressed: mk.pressed });
     if (mk.pressed) pressedKeys.current.add(mk.key);
     else pressedKeys.current.delete(mk.key);
     sendCtrl({ type: MessageType.KEYBOARD, key: mk.key, pressed: mk.pressed });
@@ -359,9 +372,14 @@ export default function App() {
           onPointerDown={onPointerDown}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerCancel}
+          onPointerMove={onPointerMove}
+          onPointerDown={onPointerDown}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerCancel}
           onDoubleClick={onDoubleClick}
           onKeyDown={onKey}
           onKeyUp={onKey}
+          onBlur={() => releaseAllKeys()}
           onBlur={() => releaseAllKeys()}
           onContextMenu={(e) => e.preventDefault()}
         >
