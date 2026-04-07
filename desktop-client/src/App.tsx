@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageType } from "./protocol";
 import { pointerToVideoFrame } from "./webrtc/coords";
-import { mapRdevKey } from "./webrtc/keyboard";
+import { mapKeyboardEvent } from "./webrtc/keyboard";
 import { ActiveSession, sendChatLine, startSession } from "./webrtc/session";
-import { listen } from "@tauri-apps/api/event";
- 
+
 const MOUSE_MOVE_INTERVAL_MS = 1000 / 60;
 const DC_BUFFER_CAP = 24 * 1024;
- 
+
 const CURSOR_CSS: Record<string, string> = {
   arrow: "default",
   ibeam: "text",
@@ -24,12 +23,12 @@ const CURSOR_CSS: Record<string, string> = {
   appstarting: "progress",
   help: "help",
 };
- 
+
 function useStatus(initial: string) {
   const [status, setStatus] = useState(initial);
   return { status, setStatus };
 }
- 
+
 export default function App() {
   const [hostId, setHostId] = useState("");
   const { status, setStatus } = useStatus("Idle");
@@ -40,7 +39,7 @@ export default function App() {
   const [chatLines, setChatLines] = useState<{ who: string; text: string }[]>([]);
   const [chatDraft, setChatDraft] = useState("");
   const [cursorName, setCursorName] = useState("arrow");
- 
+
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef<ActiveSession | null>(null);
@@ -52,9 +51,9 @@ export default function App() {
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
   const moveTimer = useRef<number | null>(null);
   const moveArmed = useRef(false);
- 
+
   const cursorStyle = useMemo(() => CURSOR_CSS[cursorName] || "default", [cursorName]);
- 
+
   const releaseAllKeys = useCallback(() => {
     const fn = ctrlSendRef.current;
     if (!fn) return;
@@ -64,15 +63,8 @@ export default function App() {
     }
     pressedKeys.current.clear();
   }, []);
- 
+
   const disconnect = useCallback(() => {
-    releaseAllKeys();
-    if (moveTimer.current != null) {
-      window.clearTimeout(moveTimer.current);
-      moveTimer.current = null;
-    }
-    moveArmed.current = false;
-    lastPointer.current = null;
     releaseAllKeys();
     if (moveTimer.current != null) {
       window.clearTimeout(moveTimer.current);
@@ -93,11 +85,11 @@ export default function App() {
     setConnecting(false);
     setStatus("Disconnected");
   }, [releaseAllKeys]);
- 
+
   const appendChat = useCallback((who: string, text: string) => {
     setChatLines((prev) => [...prev, { who, text }]);
   }, []);
- 
+
   const connect = useCallback(async () => {
     const id = hostId.trim();
     if (!id) {
@@ -105,11 +97,11 @@ export default function App() {
       return;
     }
     if (connecting || sessionAlive) return;
- 
+
     setConnecting(true);
     setStatus("Connecting…");
     setChatLines([]);
- 
+
     try {
       const s = await startSession(id, {
         onStatus: setStatus,
@@ -117,7 +109,7 @@ export default function App() {
           const v = videoRef.current;
           if (v) {
             v.srcObject = stream;
-            void v.play().catch(() => {});
+            void v.play().catch(() => { });
           }
           setStatus("Receiving video");
           setConnected(true);
@@ -125,7 +117,7 @@ export default function App() {
         onControlOpen: (send) => {
           ctrlSendRef.current = send;
         },
-        onControlMessage: () => {},
+        onControlMessage: () => { },
         onCursorName: (name) => setCursorName(name),
         onChatText: (sender, text) => appendChat(sender === "Host" ? "Host" : sender, text),
         onDataChannelsReady: (ch) => {
@@ -146,17 +138,17 @@ export default function App() {
       setConnecting(false);
     }
   }, [appendChat, connecting, disconnect, hostId, sessionAlive]);
- 
+
   useEffect(() => {
     return () => disconnect();
   }, [disconnect]);
- 
+
   const sendCtrl = (payload: object) => {
     const fn = ctrlSendRef.current;
     if (!fn) return;
     fn(JSON.stringify(payload));
   };
- 
+
   useEffect(() => {
     const onBlur = () => releaseAllKeys();
     const onVis = () => {
@@ -169,39 +161,13 @@ export default function App() {
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [releaseAllKeys]);
- 
+
   useEffect(() => {
     return () => {
       if (moveTimer.current != null) window.clearTimeout(moveTimer.current);
     };
   }, []);
 
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
-
-    const setupListener = async () => {
-      unlisten = await listen<{ key: string; pressed: boolean }>("remote-keyboard-event", (event) => {
-        if (!ctrlSendRef.current || !sessionAlive) return;
-        const mk = mapRdevKey(event.payload.key, event.payload.pressed);
-        if (!mk) return;
-
-        if (mk.pressed) {
-          if (pressedKeys.current.has(mk.key)) return;
-          pressedKeys.current.add(mk.key);
-        } else {
-          pressedKeys.current.delete(mk.key);
-        }
-
-        sendCtrl({ type: MessageType.KEYBOARD, key: mk.key, pressed: mk.pressed });
-      });
-    };
-
-    setupListener();
-    return () => {
-      if (unlisten) unlisten();
-    };
-  }, [sessionAlive]);
- 
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -234,37 +200,37 @@ export default function App() {
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, [sessionAlive]);
- 
+
   const onPointerMove = (e: React.PointerEvent) => {
     // Coalesce mouse-move to avoid queuing delays on the ordered control channel.
     lastPointer.current = { x: e.clientX, y: e.clientY };
     if (moveArmed.current) return;
     moveArmed.current = true;
- 
+
     const tick = () => {
       moveArmed.current = false;
       moveTimer.current = null;
- 
+
       const video = videoRef.current;
       const ch = sessionRef.current?.channels.ctrl;
       const fn = ctrlSendRef.current;
       const pt = lastPointer.current;
       if (!video || !ch || !fn || !pt) return;
- 
+
       const now = performance.now();
       if (now - lastMoveAt.current < MOUSE_MOVE_INTERVAL_MS) {
         moveTimer.current = window.setTimeout(tick, Math.max(0, MOUSE_MOVE_INTERVAL_MS - (now - lastMoveAt.current)));
         moveArmed.current = true;
         return;
       }
- 
+
       // Backpressure: if SCTP buffer has grown, drop moves until it drains.
       if (ch.bufferedAmount > DC_BUFFER_CAP) {
         moveTimer.current = window.setTimeout(tick, 16);
         moveArmed.current = true;
         return;
       }
- 
+
       const mapped = pointerToVideoFrame(pt.x, pt.y, video);
       if (!mapped) return;
       lastMoveAt.current = now;
@@ -278,10 +244,10 @@ export default function App() {
         }),
       );
     };
- 
+
     moveTimer.current = window.setTimeout(tick, 0);
   };
- 
+
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
     el.focus();
@@ -290,29 +256,26 @@ export default function App() {
     } catch {
       /* ignore */
     }
- 
+
     const video = videoRef.current;
     if (!video || !ctrlSendRef.current) return;
     const mapped = pointerToVideoFrame(e.clientX, e.clientY, video);
     if (!mapped) return;
- 
+
     if (e.button === 0) {
       buttonsDown.current.add("left");
-      sendCtrl({ type: MessageType.MOUSE_CLICK, button: "left", pressed: true });
       sendCtrl({ type: MessageType.MOUSE_CLICK, button: "left", pressed: true });
     } else if (e.button === 2) {
       e.preventDefault();
       buttonsDown.current.add("right");
       sendCtrl({ type: MessageType.MOUSE_CLICK, button: "right", pressed: true });
-      sendCtrl({ type: MessageType.MOUSE_CLICK, button: "right", pressed: true });
     }
   };
- 
+
   const onPointerUp = (e: React.PointerEvent) => {
     if (!ctrlSendRef.current) return;
     if (e.button === 0 && buttonsDown.current.has("left")) {
       buttonsDown.current.delete("left");
-      sendCtrl({ type: MessageType.MOUSE_CLICK, button: "left", pressed: false });
       sendCtrl({ type: MessageType.MOUSE_CLICK, button: "left", pressed: false });
     } else if (e.button === 2 && buttonsDown.current.has("right")) {
       e.preventDefault();
@@ -320,7 +283,7 @@ export default function App() {
       sendCtrl({ type: MessageType.MOUSE_CLICK, button: "right", pressed: false });
     }
   };
- 
+
   const onPointerCancel = () => {
     if (!ctrlSendRef.current) return;
     if (buttonsDown.current.has("left")) {
@@ -332,7 +295,7 @@ export default function App() {
       sendCtrl({ type: MessageType.MOUSE_CLICK, button: "right", pressed: false });
     }
   };
- 
+
   const onDoubleClick = (e: React.MouseEvent) => {
     const video = videoRef.current;
     if (!video || !ctrlSendRef.current) return;
@@ -344,16 +307,26 @@ export default function App() {
       sendCtrl({ type: MessageType.MOUSE_DOUBLE_CLICK, button: "right" });
     }
   };
- 
+
   const onKey = (e: React.KeyboardEvent) => {
-    // We now rely primarily on the Rust-side keyboard hook ('remote-keyboard-event')
-    // to capture system shortcuts like Win+R, Alt+Tab, etc.
-    // We prevent default browser actions here.
-    if (sessionAlive) {
-      e.preventDefault();
+    if (!ctrlSendRef.current) return;
+    const mk = mapKeyboardEvent(e.nativeEvent);
+    if (!mk) return;
+    
+    // Prevent default browser shortcuts when the viewer is active
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (mk.pressed) {
+      if (pressedKeys.current.has(mk.key)) return; // Avoid repeat spam if browser doesn't block it
+      pressedKeys.current.add(mk.key);
+    } else {
+      pressedKeys.current.delete(mk.key);
     }
+    
+    sendCtrl({ type: MessageType.KEYBOARD, key: mk.key, pressed: mk.pressed });
   };
- 
+
   const sendChatNow = () => {
     const ch = chatRef.current;
     if (!ch) return;
@@ -363,7 +336,7 @@ export default function App() {
     appendChat("You", t);
     setChatDraft("");
   };
- 
+
   return (
     <div className="layout">
       <div className="toolbar">
@@ -385,7 +358,7 @@ export default function App() {
         </button>
         <div className="status">{status}</div>
       </div>
- 
+
       <div className="stage">
         <div
           ref={wrapRef}
@@ -415,7 +388,7 @@ export default function App() {
             </div>
           )}
         </div>
- 
+
         {chatOpen && (
           <aside className="drawer">
             <h3>Chat</h3>
@@ -446,4 +419,3 @@ export default function App() {
     </div>
   );
 }
- 

@@ -80,15 +80,13 @@ class InputReceiver:
     def handle_keyboard(self, msg: ControlMessage):
         key = msg.key
         try:
-            k = None
+            # simple mapping
             if hasattr(Key, key):
                 k = getattr(Key, key)
             elif len(key) == 1:
                 k = key
             else:
-                # Fallback: maybe the protocol key name just needs a bit of normalization
-                # or it's a character that pynput can handle directly.
-                k = key
+                return # unknown
                 
             if msg.pressed:
                 self.keyboard.press(k)
