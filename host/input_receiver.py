@@ -72,23 +72,23 @@ class InputReceiver:
         dy = msg.scroll_dy or 0
         if dx == 0 and dy == 0:
             return
-        # Pynput scroll units are coarse; boost a little for Windows explorer feel.
-        if dx != 0:
-            dx = 2 if dx > 0 else -2
-        if dy != 0:
-            dy = 2 if dy > 0 else -2
+        # Pynput scroll units are coarse; scale them to preserve scroll logic/momentum.
+        dx = dx * 2
+        dy = dy * 2
         self.mouse.scroll(dx, dy)
             
     def handle_keyboard(self, msg: ControlMessage):
         key = msg.key
         try:
-            # simple mapping
+            k = None
             if hasattr(Key, key):
                 k = getattr(Key, key)
             elif len(key) == 1:
                 k = key
             else:
-                return # unknown
+                # Fallback: maybe the protocol key name just needs a bit of normalization
+                # or it's a character that pynput can handle directly.
+                k = key
                 
             if msg.pressed:
                 self.keyboard.press(k)

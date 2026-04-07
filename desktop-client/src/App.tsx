@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageType } from "./protocol";
 import { pointerToVideoFrame } from "./webrtc/coords";
-import { mapKeyboardEvent } from "./webrtc/keyboard";
+import { mapRdevKey } from "./webrtc/keyboard";
 import { ActiveSession, sendChatLine, startSession } from "./webrtc/session";
+import { listen } from "@tauri-apps/api/event";
  
 const MOUSE_MOVE_INTERVAL_MS = 1000 / 60;
 const DC_BUFFER_CAP = 24 * 1024;
@@ -174,6 +175,32 @@ export default function App() {
       if (moveTimer.current != null) window.clearTimeout(moveTimer.current);
     };
   }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    const setupListener = async () => {
+      unlisten = await listen<{ key: string; pressed: boolean }>("remote-keyboard-event", (event) => {
+        if (!ctrlSendRef.current || !sessionAlive) return;
+        const mk = mapRdevKey(event.payload.key, event.payload.pressed);
+        if (!mk) return;
+
+        if (mk.pressed) {
+          if (pressedKeys.current.has(mk.key)) return;
+          pressedKeys.current.add(mk.key);
+        } else {
+          pressedKeys.current.delete(mk.key);
+        }
+
+        sendCtrl({ type: MessageType.KEYBOARD, key: mk.key, pressed: mk.pressed });
+      });
+    };
+
+    setupListener();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [sessionAlive]);
  
   useEffect(() => {
     const el = wrapRef.current;
@@ -187,8 +214,9 @@ export default function App() {
       if (!mapped) return;
       const dx = e.deltaX;
       const dy = e.deltaY;
-      const scroll_dy =
-        dy === 0 ? 0 : Math.abs(dy) < 1 ? (dy > 0 ? 1 : -1) : Math.trunc(dy / 100) || (dy > 0 ? 1 : -1);
+      const scroll_dy = -(
+        dy === 0 ? 0 : Math.abs(dy) < 1 ? (dy > 0 ? 1 : -1) : Math.trunc(dy / 100) || (dy > 0 ? 1 : -1)
+      );
       const scroll_dx =
         dx === 0 ? 0 : Math.abs(dx) < 1 ? (dx > 0 ? 1 : -1) : Math.trunc(dx / 100) || (dx > 0 ? 1 : -1);
       fn(
@@ -318,16 +346,12 @@ export default function App() {
   };
  
   const onKey = (e: React.KeyboardEvent) => {
-    if (!ctrlSendRef.current) return;
-    const mk = mapKeyboardEvent(e.nativeEvent);
-    if (!mk) return;
-    e.preventDefault();
-    if (mk.pressed) pressedKeys.current.add(mk.key);
-    else pressedKeys.current.delete(mk.key);
-    sendCtrl({ type: MessageType.KEYBOARD, key: mk.key, pressed: mk.pressed });
-    if (mk.pressed) pressedKeys.current.add(mk.key);
-    else pressedKeys.current.delete(mk.key);
-    sendCtrl({ type: MessageType.KEYBOARD, key: mk.key, pressed: mk.pressed });
+    // We now rely primarily on the Rust-side keyboard hook ('remote-keyboard-event')
+    // to capture system shortcuts like Win+R, Alt+Tab, etc.
+    // We prevent default browser actions here.
+    if (sessionAlive) {
+      e.preventDefault();
+    }
   };
  
   const sendChatNow = () => {
