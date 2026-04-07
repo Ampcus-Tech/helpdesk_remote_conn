@@ -61,8 +61,8 @@ class InputSender:
         self._focus_thread.start()
         # Prevent mouse-move floods from delaying keyboard events on the same data channel.
         self._last_mouse_move_sent_at = 0.0
-        self._mouse_move_interval = 1.0 / 90.0  # cap to ~90 Hz
-        self._mouse_buffer_drop_threshold = 48 * 1024  # bytes
+        self._mouse_move_interval = 1.0 / 60.0  # cap to 60 Hz for smoother performance
+        self._mouse_buffer_drop_threshold = 24 * 1024  # tighter threshold to prevent buildup (24 KB)
         
         cv2.setMouseCallback(self.window_name, self._mouse_callback)
         

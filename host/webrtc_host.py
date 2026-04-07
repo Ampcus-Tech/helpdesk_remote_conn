@@ -127,6 +127,8 @@ class WebRTCHost:
         
         self._last_cursor_name = None
         self._cursor_task = None
+        self._input_worker_task = None
+        self._control_queue = asyncio.Queue()
         self._command_task = None
 
     def _emit(self, message: str) -> None:
@@ -192,22 +194,17 @@ class WebRTCHost:
                     self._cursor_task.cancel()
                 self._cursor_task = asyncio.create_task(self._cursor_tracking_loop(channel))
 
+                # Start input processing worker if not already running
+                if not self._input_worker_task or self._input_worker_task.done():
+                    self._input_worker_task = asyncio.create_task(self._input_worker_loop())
+
                 @channel.on("message")
                 def on_message(message):
                     try:
                         msg = ControlMessage.from_json(message)
-                        if msg.type == MessageType.MOUSE_MOVE:
-                            self.input_receiver.handle_mouse_move(msg)
-                        elif msg.type == MessageType.MOUSE_CLICK:
-                            self.input_receiver.handle_mouse_click(msg)
-                        elif msg.type == MessageType.MOUSE_DOUBLE_CLICK:
-                            self.input_receiver.handle_mouse_double_click(msg)
-                        elif msg.type == MessageType.MOUSE_SCROLL:
-                            self.input_receiver.handle_mouse_scroll(msg)
-                        elif msg.type == MessageType.KEYBOARD:
-                            self.input_receiver.handle_keyboard(msg)
+                        self._control_queue.put_nowait(msg)
                     except Exception as e:
-                        logger.error(f"Error processing control message: {e}")
+                        logger.error(f"Error queuing control message: {e}")
             elif channel.label == CHAT_CHANNEL_NAME:
                 self.chat_channel = channel
                 self._setup_chat_channel(channel)
@@ -468,6 +465,66 @@ class WebRTCHost:
         except Exception as e:
             logger.error(f"Cursor tracking error: {e}")
 
+    async def _input_worker_loop(self):
+        """
+        Process control messages from the queue.
+        Implements event coalescing for mouse moves to prevent lag buildup.
+        """
+        while True:
+            try:
+                msg = await self._control_queue.get()
+                
+                # Coalescing: skip older mouse moves in favor of the latest position.
+                if msg.type == MessageType.MOUSE_MOVE:
+                    while not self._control_queue.empty():
+                        # Peek at the next message in the asyncio.Queue
+                        next_msg = self._control_queue._queue[0]
+                        if next_msg.type == MessageType.MOUSE_MOVE:
+                            msg = await self._control_queue.get()
+                            self._control_queue.task_done()
+                        else:
+                            break
+
+                # Coalescing: accumulate scroll deltas to prevent "scroll-lag" 
+                # while preserving the total scroll amount.
+                elif msg.type == MessageType.MOUSE_SCROLL:
+                    while not self._control_queue.empty():
+                        next_msg = self._control_queue._queue[0]
+                        if next_msg.type == MessageType.MOUSE_SCROLL:
+                            # Accumulate deltas from the next scroll event
+                            peek_msg = await self._control_queue.get()
+                            msg.scroll_dx = (msg.scroll_dx or 0) + (peek_msg.scroll_dx or 0)
+                            msg.scroll_dy = (msg.scroll_dy or 0) + (peek_msg.scroll_dy or 0)
+                            # Use the latest pointer coordinates from the peeked message
+                            msg.x = peek_msg.x
+                            msg.y = peek_msg.y
+                            self._control_queue.task_done()
+                        else:
+                            break
+                            
+                # CRITICAL: Mouse clicks and keyboard events are NEVER coalesced 
+                # and are always executed in the exact order received.
+                            
+                # Process the message in a thread to avoid blocking the WebRTC loop.
+                # pynput calls can sometimes have OS-level overhead.
+                if msg.type == MessageType.MOUSE_MOVE:
+                    await asyncio.to_thread(self.input_receiver.handle_mouse_move, msg)
+                elif msg.type == MessageType.MOUSE_CLICK:
+                    await asyncio.to_thread(self.input_receiver.handle_mouse_click, msg)
+                elif msg.type == MessageType.MOUSE_DOUBLE_CLICK:
+                    await asyncio.to_thread(self.input_receiver.handle_mouse_double_click, msg)
+                elif msg.type == MessageType.MOUSE_SCROLL:
+                    await asyncio.to_thread(self.input_receiver.handle_mouse_scroll, msg)
+                elif msg.type == MessageType.KEYBOARD:
+                    await asyncio.to_thread(self.input_receiver.handle_keyboard, msg)
+                
+                self._control_queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Input worker error: {e}")
+                await asyncio.sleep(0.01)
+
     async def connect_signaling(self):
         logger.info(f"Connecting to signaling server at {SIGNALING_URL}")
         self._emit(f"Connecting to signaling server...")
@@ -562,6 +619,10 @@ class WebRTCHost:
         except asyncio.CancelledError:
             pass
         finally:
+            if self._input_worker_task:
+                self._input_worker_task.cancel()
+            if self._cursor_task:
+                self._cursor_task.cancel()
             if self._command_task:
                 self._command_task.cancel()
             if self.pc:
