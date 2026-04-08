@@ -10,7 +10,7 @@ type KeyboardHookState = Arc<KeyboardHook>;
 
 #[tauri::command]
 async fn start_keyboard_hook(
-    app_handle: tauri::AppHandle,
+    _app_handle: tauri::AppHandle,
     state: State<'_, KeyboardHookState>,
 ) -> Result<(), String> {
     state.start_hooking().map_err(|e| e.to_string())

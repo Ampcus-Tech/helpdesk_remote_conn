@@ -1,8 +1,7 @@
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,12 +93,11 @@ mod windows {
     use winapi::um::winuser::{
         SetWindowsHookExA, UnhookWindowsHookEx, CallNextHookEx, GetMessageA,
         HC_ACTION, WH_KEYBOARD_LL, KBDLLHOOKSTRUCT, WM_KEYDOWN, WM_KEYUP,
-        WM_SYSKEYDOWN, WM_SYSKEYUP, GetForegroundWindow, GetWindowTextLengthW,
-        GetWindowTextW, IsIconic, IsWindowVisible,
+        WM_SYSKEYDOWN, GetForegroundWindow, GetWindowTextLengthW,
+        GetWindowTextW, IsIconic, IsWindowVisible, MSG,
     };
-    use winapi::um::processthreadsapi::GetCurrentThreadId;
     use winapi::um::handleapi::INVALID_HANDLE_VALUE;
-    use winapi::shared::windef::{HHOOK, HHOOK__, HWND};
+    use winapi::shared::windef::HHOOK;
     use winapi::shared::minwindef::{DWORD, WPARAM, LPARAM, LRESULT};
     use std::ffi::OsString;
     use std::os::windows::ffi::OsStringExt;
@@ -121,7 +119,7 @@ mod windows {
                     let key_name = map_vk_code_to_string(vk_code);
                     if let Some(key) = key_name {
                         let pressed = matches!(
-                            w_param,
+                            w_param as u32,
                             WM_KEYDOWN | WM_SYSKEYDOWN
                         );
                         
@@ -164,10 +162,10 @@ mod windows {
                 0,
             );
             
-            if hook != (INVALID_HANDLE_VALUE as HOOK) {
+            if hook != (INVALID_HANDLE_VALUE as HHOOK) {
                 HOOK = Some(hook);
                 
-                let mut msg = std::mem::zeroed();
+                let mut msg: MSG = std::mem::zeroed();
                 while *HOOK_DATA.as_ref().unwrap().0.lock().unwrap() {
                     if GetMessageA(&mut msg, ptr::null_mut(), 0, 0) <= 0 {
                         break;
@@ -184,7 +182,7 @@ mod windows {
         }
     }
 
-    pub fn is_window_focused(app_handle: &AppHandle) -> bool {
+    pub fn is_window_focused(_app_handle: &AppHandle) -> bool {
         unsafe {
             let hwnd = GetForegroundWindow();
             if hwnd.is_null() {
