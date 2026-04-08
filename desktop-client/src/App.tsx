@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { MessageType } from "./protocol";
 import { pointerToVideoFrame } from "./webrtc/coords";
 import { mapKeyboardEvent } from "./webrtc/keyboard";
@@ -155,7 +156,13 @@ export default function App() {
     if (!fn) return;
     fn(JSON.stringify(payload));
   };
- 
+
+  const sendShortcut = useCallback((keys: { key: string; pressed: boolean }[]) => {
+    for (const k of keys) {
+      sendCtrl({ type: MessageType.KEYBOARD, key: k.key, pressed: k.pressed });
+    }
+  }, []);
+
   useEffect(() => {
     const onBlur = () => releaseAllKeys();
     const onVis = () => {
@@ -206,7 +213,61 @@ export default function App() {
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, [sessionAlive]);
- 
+
+  useEffect(() => {
+    const unlisten = listen<string>("shortcut", (event) => {
+      if (!sessionAlive) return;
+      const shortcut = event.payload;
+      let keys: { key: string; pressed: boolean }[] = [];
+      switch (shortcut) {
+        case "Super+R":
+          keys = [
+            { key: "cmd_l", pressed: true },
+            { key: "r", pressed: true },
+            { key: "r", pressed: false },
+            { key: "cmd_l", pressed: false },
+          ];
+          break;
+        case "Ctrl+Shift+Escape":
+          keys = [
+            { key: "ctrl_l", pressed: true },
+            { key: "shift_l", pressed: true },
+            { key: "esc", pressed: true },
+            { key: "esc", pressed: false },
+            { key: "shift_l", pressed: false },
+            { key: "ctrl_l", pressed: false },
+          ];
+          break;
+        case "Alt+Tab":
+          keys = [
+            { key: "alt_l", pressed: true },
+            { key: "tab", pressed: true },
+            { key: "tab", pressed: false },
+            { key: "alt_l", pressed: false },
+          ];
+          break;
+        case "Super+Tab":
+          keys = [
+            { key: "cmd_l", pressed: true },
+            { key: "tab", pressed: true },
+            { key: "tab", pressed: false },
+            { key: "cmd_l", pressed: false },
+          ];
+          break;
+        case "Snapshot":
+          keys = [
+            { key: "print_screen", pressed: true },
+            { key: "print_screen", pressed: false },
+          ];
+          break;
+      }
+      sendShortcut(keys);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [sessionAlive, sendShortcut]);
+
   const onPointerMove = (e: React.PointerEvent) => {
     // Coalesce mouse-move to avoid queuing delays on the ordered control channel.
     lastPointer.current = { x: e.clientX, y: e.clientY };
