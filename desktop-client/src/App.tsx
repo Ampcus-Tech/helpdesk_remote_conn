@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageType } from "./protocol";
 import { pointerToVideoFrame } from "./webrtc/coords";
 import { mapKeyboardEvent } from "./webrtc/keyboard";
-import { ActiveSession, sendChatLine, startSession } from "./webrtc/session";
+import { ActiveSession, sendChatLine, startHostSession, startSession } from "./webrtc/session";
  
 const MOUSE_MOVE_INTERVAL_MS = 1000 / 60;
 const DC_BUFFER_CAP = 24 * 1024;
+
+const generateHostId = () => Math.floor(100000 + Math.random() * 900000).toString();
  
 const CURSOR_CSS: Record<string, string> = {
   arrow: "default",
@@ -30,7 +32,9 @@ function useStatus(initial: string) {
 }
  
 export default function App() {
+  const [role, setRole] = useState<"host" | "client">("client");
   const [hostId, setHostId] = useState("");
+  const [signalingUrl, setSignalingUrl] = useState(import.meta.env.VITE_SIGNALING_URL || "ws://127.0.0.1:8080");
   const { status, setStatus } = useStatus("Idle");
   const [connecting, setConnecting] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -39,6 +43,7 @@ export default function App() {
   const [chatLines, setChatLines] = useState<{ who: string; text: string }[]>([]);
   const [chatDraft, setChatDraft] = useState("");
   const [cursorName, setCursorName] = useState("arrow");
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
  
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -87,11 +92,15 @@ export default function App() {
     if (v) {
       v.srcObject = null;
     }
+    if (localStream) {
+      localStream.getTracks().forEach((track) => track.stop());
+      setLocalStream(null);
+    }
     setConnected(false);
     setSessionAlive(false);
     setConnecting(false);
     setStatus("Disconnected");
-  }, [releaseAllKeys]);
+  }, [localStream, releaseAllKeys]);
  
   const appendChat = useCallback((who: string, text: string) => {
     setChatLines((prev) => [...prev, { who, text }]);
@@ -100,43 +109,51 @@ export default function App() {
   const connect = useCallback(async () => {
     const id = hostId.trim();
     if (!id) {
-      setStatus("Enter a host ID");
+      setStatus(role === "host" ? "Enter a Host ID" : "Enter a Host ID to connect");
       return;
     }
     if (connecting || sessionAlive) return;
  
     setConnecting(true);
-    setStatus("Connecting…");
+    setStatus(role === "host" ? "Starting host..." : "Connecting…");
     setChatLines([]);
  
     try {
-      const s = await startSession(id, {
+      const handlers = {
         onStatus: setStatus,
-        onVideoStream: (stream) => {
+        onVideoStream: (stream: MediaStream) => {
           const v = videoRef.current;
           if (v) {
             v.srcObject = stream;
             void v.play().catch(() => {});
           }
-          setStatus("Receiving video");
+          setStatus(role === "host" ? "Sharing screen" : "Receiving video");
           setConnected(true);
+          setLocalStream(stream);
         },
-        onControlOpen: (send) => {
+        onControlOpen: (send: (json: string) => void) => {
           ctrlSendRef.current = send;
         },
         onControlMessage: () => {},
-        onCursorName: (name) => setCursorName(name),
-        onChatText: (sender, text) => appendChat(sender === "Host" ? "Host" : sender, text),
-        onDataChannelsReady: (ch) => {
+        onCursorName: (name: string) => setCursorName(name),
+        onChatText: (sender: string, text: string) => appendChat(sender, text),
+        onDataChannelsReady: (ch: { ctrl: RTCDataChannel; chat: RTCDataChannel; file: RTCDataChannel }) => {
           chatRef.current = ch.chat;
           setStatus("Session ready (chat/files)");
+          setConnected(true);
         },
-        onSessionEnd: (reason) => {
+        onSessionEnd: (reason: string) => {
           setStatus(reason);
           disconnect();
         },
-      });
-      sessionRef.current = s;
+      };
+
+      const session =
+        role === "host"
+          ? await startHostSession(id, handlers, signalingUrl)
+          : await startSession(id, handlers, signalingUrl);
+
+      sessionRef.current = session;
       setSessionAlive(true);
     } catch (e) {
       setStatus(e instanceof Error ? e.message : String(e));
@@ -144,7 +161,13 @@ export default function App() {
     } finally {
       setConnecting(false);
     }
-  }, [appendChat, connecting, disconnect, hostId, sessionAlive]);
+  }, [appendChat, connecting, disconnect, hostId, role, signalingUrl, sessionAlive]);
+ 
+  useEffect(() => {
+    if (role === "host" && !hostId) {
+      setHostId(generateHostId());
+    }
+  }, [hostId, role]);
  
   useEffect(() => {
     return () => disconnect();
@@ -218,7 +241,7 @@ export default function App() {
       moveTimer.current = null;
  
       const video = videoRef.current;
-      const ch = sessionRef.current?.channels.ctrl;
+      const ch = sessionRef.current?.channels?.ctrl;
       const fn = ctrlSendRef.current;
       const pt = lastPointer.current;
       if (!video || !ch || !fn || !pt) return;
@@ -343,15 +366,46 @@ export default function App() {
   return (
     <div className="layout">
       <div className="toolbar">
+        <div className="role-buttons">
+          <button
+            type="button"
+            className={role === "host" ? "active" : "secondary"}
+            disabled={connecting || sessionAlive}
+            onClick={() => setRole("host")}
+          >
+            Host session
+          </button>
+          <button
+            type="button"
+            className={role === "client" ? "active" : "secondary"}
+            disabled={connecting || sessionAlive}
+            onClick={() => setRole("client")}
+          >
+            Join session
+          </button>
+        </div>
+
         <input
           type="text"
-          placeholder="Host ID (6 digits)"
+          placeholder="Signaling URL"
+          value={signalingUrl}
+          disabled={connecting || sessionAlive}
+          onChange={(e) => setSignalingUrl(e.target.value)}
+        />
+        <input
+          type="text"
+          placeholder={role === "host" ? "Host ID to share" : "Host ID to connect"}
           value={hostId}
           disabled={connecting || sessionAlive}
           onChange={(e) => setHostId(e.target.value.replace(/\D/g, "").slice(0, 8))}
         />
+        {role === "host" && (
+          <button type="button" className="secondary" disabled={connecting || sessionAlive} onClick={() => setHostId(generateHostId())}>
+            New ID
+          </button>
+        )}
         <button type="button" disabled={connecting || sessionAlive || !hostId.trim()} onClick={connect}>
-          Connect
+          {role === "host" ? "Start as host" : "Connect"}
         </button>
         <button type="button" className="secondary" disabled={!sessionAlive} onClick={disconnect}>
           Disconnect
@@ -366,15 +420,15 @@ export default function App() {
         <div
           ref={wrapRef}
           className="video-wrap"
-          tabIndex={0}
-          style={{ cursor: cursorStyle }}
-          onPointerMove={onPointerMove}
-          onPointerDown={onPointerDown}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerCancel}
-          onDoubleClick={onDoubleClick}
-          onKeyDown={onKey}
-          onKeyUp={onKey}
+          tabIndex={role === "client" ? 0 : -1}
+          style={{ cursor: role === "client" ? cursorStyle : "default" }}
+          onPointerMove={role === "client" ? onPointerMove : undefined}
+          onPointerDown={role === "client" ? onPointerDown : undefined}
+          onPointerUp={role === "client" ? onPointerUp : undefined}
+          onPointerCancel={role === "client" ? onPointerCancel : undefined}
+          onDoubleClick={role === "client" ? onDoubleClick : undefined}
+          onKeyDown={role === "client" ? onKey : undefined}
+          onKeyUp={role === "client" ? onKey : undefined}
           onBlur={() => releaseAllKeys()}
           onContextMenu={(e) => e.preventDefault()}
         >
@@ -382,12 +436,21 @@ export default function App() {
           <div className="capture-layer" style={{ cursor: cursorStyle }} />
           {!connected && (
             <div className="hint">
-              Tauri + React viewer: enter Host ID, start <code>python signaling/server.py</code> and{" "}
-              <code>python host/main.py</code>, then connect.
-              <div style={{ marginTop: 12 }}>
-                Configure <code>.env</code>: <code>VITE_SIGNALING_URL</code>, <code>VITE_ICE_SERVERS_JSON</code> (match{" "}
-                <code>common/config.py</code>).
-              </div>
+              {role === "host" ? (
+                <>
+                  Start host mode and choose a screen/window to share.
+                  <div style={{ marginTop: 12 }}>
+                    Share the Host ID shown above with your client.
+                  </div>
+                </>
+              ) : (
+                <>
+                  Enter a Host ID and connect to the host session.
+                  <div style={{ marginTop: 12 }}>
+                    Make sure the signaling URL is correct and the host is running.
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>
