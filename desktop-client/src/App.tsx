@@ -3,6 +3,8 @@ import { MessageType } from "./protocol";
 import { pointerToVideoFrame } from "./webrtc/coords";
 import { mapKeyboardEvent } from "./webrtc/keyboard";
 import { ActiveSession, sendChatLine, startSession } from "./webrtc/session";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 const MOUSE_MOVE_INTERVAL_MS = 1000 / 60;
 const DC_BUFFER_CAP = 24 * 1024;
@@ -39,6 +41,7 @@ export default function App() {
   const [chatLines, setChatLines] = useState<{ who: string; text: string }[]>([]);
   const [chatDraft, setChatDraft] = useState("");
   const [cursorName, setCursorName] = useState("arrow");
+  const [useSystemKeyboard, setUseSystemKeyboard] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -84,6 +87,10 @@ export default function App() {
     setSessionAlive(false);
     setConnecting(false);
     setStatus("Disconnected");
+    setUseSystemKeyboard(false);
+    
+    // Stop system keyboard hook
+    invoke("stop_keyboard_hook").catch(console.error);
   }, [releaseAllKeys]);
 
   const appendChat = useCallback((who: string, text: string) => {
@@ -103,6 +110,10 @@ export default function App() {
     setChatLines([]);
 
     try {
+      // Start system keyboard hook for capturing system shortcuts
+      await invoke("start_keyboard_hook");
+      setUseSystemKeyboard(true);
+
       const s = await startSession(id, {
         onStatus: setStatus,
         onVideoStream: (stream) => {
@@ -140,8 +151,25 @@ export default function App() {
   }, [appendChat, connecting, disconnect, hostId, sessionAlive]);
 
   useEffect(() => {
-    return () => disconnect();
-  }, [disconnect]);
+    // Listen for keyboard events from the system hook
+    const unlisten = listen("keyboard-event", (event: any) => {
+      if (!useSystemKeyboard || !ctrlSendRef.current) return;
+      
+      const { key, pressed } = event.payload as { key: string; pressed: boolean };
+      
+      // Forward the key to the remote host
+      ctrlSendRef.current(JSON.stringify({
+        type: MessageType.KEYBOARD,
+        key,
+        pressed
+      }));
+    });
+
+    return () => {
+      unlisten.then(fn => fn());
+      disconnect();
+    };
+  }, [disconnect, useSystemKeyboard]);
 
   const sendCtrl = (payload: object) => {
     const fn = ctrlSendRef.current;
@@ -309,6 +337,9 @@ export default function App() {
   };
 
   const onKey = (e: React.KeyboardEvent) => {
+    // If system keyboard is active, don't handle browser keyboard events
+    if (useSystemKeyboard) return;
+    
     if (!ctrlSendRef.current) return;
     const mk = mapKeyboardEvent(e.nativeEvent);
     if (!mk) return;
@@ -355,6 +386,22 @@ export default function App() {
         </button>
         <button type="button" className="secondary" onClick={() => setChatOpen((v) => !v)}>
           {chatOpen ? "Hide chat" : "Show chat"}
+        </button>
+        <button 
+          type="button" 
+          className={useSystemKeyboard ? "primary" : "secondary"}
+          disabled={!sessionAlive}
+          onClick={async () => {
+            if (useSystemKeyboard) {
+              await invoke("stop_keyboard_hook");
+              setUseSystemKeyboard(false);
+            } else {
+              await invoke("start_keyboard_hook");
+              setUseSystemKeyboard(true);
+            }
+          }}
+        >
+          {useSystemKeyboard ? "System Keys ON" : "System Keys OFF"}
         </button>
         <div className="status">{status}</div>
       </div>
