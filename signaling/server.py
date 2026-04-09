@@ -33,7 +33,7 @@ async def find_host(websocket: WebSocketServerProtocol, host_id: str):
         # In WebRTC, typically the caller (Client in this case) sends the first SDP offer
         # We don't necessarily send a message yet, just route future messages.
     else:
-        logger.warning(f"Host {host_id} not found")
+        logger.warning(f"Client {websocket.remote_address} searching for host {host_id}, but that host is NOT REGISTERED.")
         response = SignalingMessage(type=MessageType.HOST_NOT_FOUND, host_id=host_id)
         await websocket.send(response.to_json())
 

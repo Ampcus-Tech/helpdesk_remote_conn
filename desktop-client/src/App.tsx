@@ -109,7 +109,7 @@ export default function App() {
   const connect = useCallback(async () => {
     const id = hostId.trim();
     if (!id) {
-      setStatus(role === "host" ? "Enter a Host ID" : "Enter a Host ID to connect");
+      setStatus(role === "host" ? "Please generate or enter a Host ID" : "Please enter the Host ID provided by the remote user");
       return;
     }
     if (connecting || sessionAlive) return;
@@ -385,13 +385,17 @@ export default function App() {
           </button>
         </div>
 
-        <input
-          type="text"
-          placeholder="Signaling URL"
-          value={signalingUrl}
-          disabled={connecting || sessionAlive}
-          onChange={(e) => setSignalingUrl(e.target.value)}
-        />
+        <div className="signaling-input">
+          <label htmlFor="signaling-url">Signaling Server:</label>
+          <input
+            id="signaling-url"
+            type="text"
+            placeholder="e.g. ws://localhost:8080 or wss://xxxx.ngrok-free.app"
+            value={signalingUrl}
+            disabled={connecting || sessionAlive}
+            onChange={(e) => setSignalingUrl(e.target.value)}
+          />
+        </div>
         <input
           type="text"
           placeholder={role === "host" ? "Host ID to share" : "Host ID to connect"}

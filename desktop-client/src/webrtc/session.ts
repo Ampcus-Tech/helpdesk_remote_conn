@@ -82,8 +82,20 @@ export async function startSession(hostId: string, handlers: SessionHandlers, si
 
   const ws = await new Promise<WebSocket>((resolve, reject) => {
     const s = new WebSocket(url);
-    s.onopen = () => resolve(s);
-    s.onerror = () => reject(new Error("WebSocket failed to connect"));
+    const timeout = window.setTimeout(() => {
+      s.close();
+      reject(new Error(`Connecting to signaling server timed out: ${url}`));
+    }, 10000);
+
+    s.onopen = () => {
+      window.clearTimeout(timeout);
+      handlers.onStatus("Connected to signaling server.");
+      resolve(s);
+    };
+    s.onerror = () => {
+      window.clearTimeout(timeout);
+      reject(new Error(`Failed to connect to signaling server: ${url}. Is signaling/server.py running?`));
+    };
   });
 
   const iceServers = loadIceServers();
@@ -195,7 +207,7 @@ export async function startSession(hostId: string, handlers: SessionHandlers, si
       }
       if (data.type === MessageType.HOST_NOT_FOUND) {
         window.clearTimeout(timer);
-        reject(new Error(`Host ${hostId} not found on signaling server`));
+        reject(new Error(`Host ID '${hostId}' is not registered on the signaling server. Please start the Host first.`));
         return;
       }
       if (data.type === MessageType.SDP && data.sdp?.sdp && data.sdp.type) {
