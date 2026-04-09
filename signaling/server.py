@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 import json
 import logging
 import websockets
@@ -121,9 +122,21 @@ async def handle_connection(websocket: WebSocketServerProtocol):
             del clients_to_hosts[websocket]
 
 async def start_server():
-    setup_logging()
+    setup_logging(level=logging.DEBUG)
+    
+    async def process_request(path, request_headers):
+        # Useful for debugging 426 Upgrade Required errors
+        logger.debug(f"Incoming handshake request to {path}")
+        logger.debug(f"Headers: {request_headers}")
+        return None  # Continue with normal WebSocket handshake
+
     logger.info(f"Starting signaling server on 0.0.0.0:{SIGNALING_PORT}...")
-    async with websockets.serve(handle_connection, "0.0.0.0", SIGNALING_PORT):
+    async with websockets.serve(
+        handle_connection, 
+        "0.0.0.0", 
+        SIGNALING_PORT,
+        process_request=process_request
+    ):
         await asyncio.Future()  # run forever
 
 if __name__ == "__main__":
