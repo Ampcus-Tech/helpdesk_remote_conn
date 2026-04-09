@@ -16,6 +16,8 @@ async def main():
     host_id = generate_host_id()
     print("=========================================")
     print(f"Host ID to connect: {host_id}")
+    # UI SIGNAL for Tauri/React to capture
+    print(f"UI_SIGNAL:HOST_ID:{host_id}", flush=True)
     print("=========================================")
     
     host = WebRTCHost(host_id)

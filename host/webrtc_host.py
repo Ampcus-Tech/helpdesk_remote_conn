@@ -87,6 +87,7 @@ class WebRTCHost:
         on_file_offer=None,
         on_file_progress=None,
         on_file_done=None,
+        on_connected=None,
         command_queue=None,
     ):
         self.host_id = host_id
@@ -99,6 +100,7 @@ class WebRTCHost:
         self.on_file_offer = on_file_offer
         self.on_file_progress = on_file_progress
         self.on_file_done = on_file_done
+        self.on_connected = on_connected
         self.chat_channel = None
         self.file_channel = None
         self.loop = None
@@ -245,6 +247,8 @@ class WebRTCHost:
         if self._chat_opened and self._file_opened:
             self._channels_ready = True
             self._emit("SESSION_CONNECTED")
+            if self.on_connected:
+                self.on_connected()
 
     def _setup_chat_channel(self, channel):
         @channel.on("open")
