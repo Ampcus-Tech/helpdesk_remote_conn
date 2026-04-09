@@ -3,6 +3,7 @@ export const MessageType = {
   REGISTER_HOST: "register_host",
   FIND_HOST: "find_host",
   HOST_REGISTERED: "host_registered",
+  HOST_FOUND: "host_found",
   HOST_NOT_FOUND: "host_not_found",
   SDP: "sdp",
   ICE: "ice",

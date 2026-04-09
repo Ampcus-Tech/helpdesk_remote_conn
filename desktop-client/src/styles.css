@@ -44,25 +44,12 @@ body,
 }
 
 .toolbar input[type="text"] {
-  min-width: 140px;
+  min-width: 220px;
   padding: 8px 10px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  font-family: inherit;
-}
-
-.signaling-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.signaling-input input {
-  min-width: 180px !important;
 }
 
 .toolbar button {
@@ -108,10 +95,9 @@ body,
 
 .status {
   margin-left: auto;
-  color: var(--accent);
+  color: var(--muted);
   font-size: 13px;
-  font-weight: 500;
-  max-width: 35%;
+  max-width: 45%;
   text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;

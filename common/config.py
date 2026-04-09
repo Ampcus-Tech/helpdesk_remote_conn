@@ -9,8 +9,8 @@ _log = logging.getLogger(__name__)
 SIGNALING_HOST = os.getenv("SIGNALING_HOST", "0.0.0.0")
 SIGNALING_PORT = 8080
 
-# FOR NGROK: Set SIGNALING_URL="wss://kiera-unsensory-kathrine.ngrok-free.dev"
-# FOR LOCAL: Use SIGNALING_URL="ws://127.0.0.1:8080"
+# FOR NGROK: Change this to "wss://xxxx.ngrok-free.app"
+# FOR LOCAL: It will automatically use ws://0.0.0.0:8080
 SIGNALING_URL = os.getenv("SIGNALING_URL", "wss://kiera-unsensory-kathrine.ngrok-free.dev")
 NO_RELAY = os.getenv("NO_RELAY", "").lower() in ("1", "true", "yes")
 

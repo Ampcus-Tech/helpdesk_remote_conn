@@ -19,22 +19,26 @@ hosts = {}
 # so we can route client messages back to the correct host.
 clients_to_hosts = {}
 
-async def register_host(websocket: WebSocketServerProtocol, host_id: str):
-    logger.info(f"Registering host {host_id}")
-    hosts[host_id] = websocket
-    response = SignalingMessage(type=MessageType.HOST_REGISTERED, host_id=host_id)
+async def register_host(websocket: WebSocketServerProtocol, host_id: Any):
+    host_id_str = str(host_id)
+    logger.info(f"Registering host {host_id_str}")
+    hosts[host_id_str] = websocket
+    response = SignalingMessage(type=MessageType.HOST_REGISTERED, host_id=host_id_str)
     await websocket.send(response.to_json())
 
-async def find_host(websocket: WebSocketServerProtocol, host_id: str):
-    logger.info(f"Client searching for host {host_id}")
-    if host_id in hosts:
-        clients_to_hosts[websocket] = host_id
+async def find_host(websocket: WebSocketServerProtocol, host_id: Any):
+    host_id_str = str(host_id)
+    logger.info(f"Client searching for host {host_id_str}")
+    if host_id_str in hosts:
+        clients_to_hosts[websocket] = host_id_str
+        # Let client know host was found
+        response = SignalingMessage(type=MessageType.HOST_FOUND, host_id=host_id_str)
+        await websocket.send(response.to_json())
         # Let host know a client wants to connect via an offer they will send
-        # In WebRTC, typically the caller (Client in this case) sends the first SDP offer
-        # We don't necessarily send a message yet, just route future messages.
+        # Typically the client follows up with an SDP offer.
     else:
-        logger.warning(f"Client {websocket.remote_address} searching for host {host_id}, but that host is NOT REGISTERED.")
-        response = SignalingMessage(type=MessageType.HOST_NOT_FOUND, host_id=host_id)
+        logger.warning(f"Host {host_id_str} not found")
+        response = SignalingMessage(type=MessageType.HOST_NOT_FOUND, host_id=host_id_str)
         await websocket.send(response.to_json())
 
 async def relay_message_to_host(websocket: WebSocketServerProtocol, msg: json):
@@ -73,13 +77,13 @@ async def handle_connection(websocket: WebSocketServerProtocol):
                 host_id = data.get("host_id")
                 await register_host(websocket, host_id)
                 is_host = True
-                connected_host_id = host_id
+                connected_host_id = str(host_id)
                 
             elif msg_type == MessageType.FIND_HOST:
                 host_id = data.get("host_id")
                 await find_host(websocket, host_id)
                 is_host = False
-                connected_host_id = host_id
+                connected_host_id = str(host_id)
                 
             elif msg_type in [MessageType.SDP, MessageType.ICE]:
                 # If we are the host, broadcasting to all connected clients is one way.
@@ -109,9 +113,10 @@ async def handle_connection(websocket: WebSocketServerProtocol):
     except websockets.exceptions.ConnectionClosed:
         logger.info(f"Connection closed {websocket.remote_address}")
     finally:
-        if is_host and connected_host_id in hosts:
-            del hosts[connected_host_id]
-            logger.info(f"Unregistered host {connected_host_id}")
+        if is_host and connected_host_id and connected_host_id in hosts:
+            if hosts[connected_host_id] == websocket:
+                del hosts[connected_host_id]
+                logger.info(f"Unregistered host {connected_host_id}")
         if websocket in clients_to_hosts:
             del clients_to_hosts[websocket]
 

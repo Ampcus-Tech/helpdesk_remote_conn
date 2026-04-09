@@ -82,20 +82,8 @@ export async function startSession(hostId: string, handlers: SessionHandlers, si
 
   const ws = await new Promise<WebSocket>((resolve, reject) => {
     const s = new WebSocket(url);
-    const timeout = window.setTimeout(() => {
-      s.close();
-      reject(new Error(`Connecting to signaling server timed out: ${url}`));
-    }, 10000);
-
-    s.onopen = () => {
-      window.clearTimeout(timeout);
-      handlers.onStatus("Connected to signaling server.");
-      resolve(s);
-    };
-    s.onerror = () => {
-      window.clearTimeout(timeout);
-      reject(new Error(`Failed to connect to signaling server: ${url}. Is signaling/server.py running?`));
-    };
+    s.onopen = () => resolve(s);
+    s.onerror = () => reject(new Error("WebSocket failed to connect"));
   });
 
   const iceServers = loadIceServers();
@@ -184,6 +172,25 @@ export async function startSession(hostId: string, handlers: SessionHandlers, si
 
   ws.send(JSON.stringify({ type: MessageType.FIND_HOST, host_id: hostId }));
 
+  // Wait for HOST_FOUND first
+  await new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error("Host lookup timed out")), 5000);
+    const oldOnMsg = ws.onmessage;
+    ws.onmessage = (ev) => {
+      try {
+        const data = JSON.parse(ev.data as string);
+        if (data.type === MessageType.HOST_FOUND) {
+          window.clearTimeout(timer);
+          ws.onmessage = oldOnMsg;
+          resolve();
+        } else if (data.type === MessageType.HOST_NOT_FOUND) {
+          window.clearTimeout(timer);
+          reject(new Error(`Host ${hostId} not found`));
+        }
+      } catch { /* ignore */ }
+    };
+  });
+
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   handlers.onStatus("Gathering ICE candidates...");
@@ -199,7 +206,7 @@ export async function startSession(hostId: string, handlers: SessionHandlers, si
     }, 120_000);
 
     ws.onmessage = (ev) => {
-      let data: { type?: string; sdp?: { sdp?: string; type?: RTCSdpType } };
+      let data: { type?: string; sdp?: { sdp?: string; type?: RTCSdpType }; ice?: RTCIceCandidateInit };
       try {
         data = JSON.parse(ev.data as string);
       } catch {
@@ -207,15 +214,24 @@ export async function startSession(hostId: string, handlers: SessionHandlers, si
       }
       if (data.type === MessageType.HOST_NOT_FOUND) {
         window.clearTimeout(timer);
-        reject(new Error(`Host ID '${hostId}' is not registered on the signaling server. Please start the Host first.`));
+        reject(new Error(`Host ${hostId} not found on signaling server`));
         return;
       }
       if (data.type === MessageType.SDP && data.sdp?.sdp && data.sdp.type) {
         window.clearTimeout(timer);
         resolve({ type: data.sdp.type, sdp: data.sdp.sdp });
       }
+      if (data.type === MessageType.ICE && data.ice) {
+        pc.addIceCandidate(data.ice).catch(() => { });
+      }
     };
   });
+
+  pc.onicecandidate = (ev) => {
+    if (ev.candidate) {
+      ws.send(JSON.stringify({ type: MessageType.ICE, ice: ev.candidate.toJSON() }));
+    }
+  };
 
   await pc.setRemoteDescription(answer);
   handlers.onStatus("WebRTC negotiated; waiting for media…");
@@ -300,6 +316,9 @@ export async function startHostSession(hostId: string, handlers: SessionHandlers
       };
     } else if (channel.label === CTRL) {
       ctrl = channel;
+      ctrl.onopen = () => {
+        maybeEmitChannelsReady();
+      };
       ctrl.onmessage = (ev) => {
         const text = typeof ev.data === "string" ? ev.data : "";
         handlers.onControlMessage(text);
