@@ -397,23 +397,26 @@ export default function App() {
           placeholder={role === "host" ? "Host ID to share" : "Host ID to connect"}
           value={hostId}
           disabled={connecting || sessionAlive}
+          style={{ fontWeight: "bold", textAlign: "center", minWidth: "120px", color: role === "host" ? "#00ff88" : "inherit" }}
           onChange={(e) => setHostId(e.target.value.replace(/\D/g, "").slice(0, 8))}
         />
-        {role === "host" && (
-          <button type="button" className="secondary" disabled={connecting || sessionAlive} onClick={() => setHostId(generateHostId())}>
+        {role === "host" && !sessionAlive && !connecting && (
+          <button type="button" className="secondary" onClick={() => setHostId(generateHostId())}>
             New ID
           </button>
         )}
-        <button type="button" disabled={connecting || sessionAlive || !hostId.trim()} onClick={connect}>
-          {role === "host" ? "Start as host" : "Connect"}
-        </button>
-        <button type="button" className="secondary" disabled={!sessionAlive} onClick={disconnect}>
-          Disconnect
+        <button 
+          type="button" 
+          className={!sessionAlive ? "primary" : "secondary"}
+          disabled={connecting || (!sessionAlive && !hostId.trim())} 
+          onClick={sessionAlive ? disconnect : connect}
+        >
+          {connecting ? "Starting..." : sessionAlive ? "Stop Session" : role === "host" ? "Start Host" : "Connect"}
         </button>
         <button type="button" className="secondary" onClick={() => setChatOpen((v) => !v)}>
           {chatOpen ? "Hide chat" : "Show chat"}
         </button>
-        <div className="status">{status}</div>
+        <div className="status" style={{ marginLeft: "auto" }}>{status}</div>
       </div>
  
       <div className="stage">
