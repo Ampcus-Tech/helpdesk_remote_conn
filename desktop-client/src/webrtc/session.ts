@@ -12,7 +12,7 @@ export type SessionHandlers = {
   onControlOpen: (send: (json: string) => void) => void;
   onControlMessage: (text: string) => void;
   onCursorName: (name: string) => void;
-  onChatText: (sender: "Host" | "You", text: string) => void;
+  onChatText: (sender: string, text: string) => void;
   onDataChannelsReady: (ch: DataChannels) => void;
   onSessionEnd: (reason: string) => void;
 };
@@ -20,7 +20,7 @@ export type SessionHandlers = {
 export type ActiveSession = {
   pc: RTCPeerConnection;
   ws: WebSocket;
-  channels: DataChannels;
+  channels?: DataChannels;
   close: () => void;
 };
 
@@ -76,12 +76,12 @@ export function sendChatLine(chat: RTCDataChannel, text: string) {
 /**
  * Start viewer session: WebSocket signaling + WebRTC (matches Python `client/webrtc_client.py` flow).
  */
-export async function startSession(hostId: string, handlers: SessionHandlers): Promise<ActiveSession> {
-  const signalingUrl = import.meta.env.VITE_SIGNALING_URL || "ws://127.0.0.1:8080";
-  handlers.onStatus(`Signaling: ${signalingUrl}`);
+export async function startSession(hostId: string, handlers: SessionHandlers, signalingUrl?: string): Promise<ActiveSession> {
+  const url = signalingUrl || import.meta.env.VITE_SIGNALING_URL || "ws://127.0.0.1:8080";
+  handlers.onStatus(`Signaling: ${url}`);
 
   const ws = await new Promise<WebSocket>((resolve, reject) => {
-    const s = new WebSocket(signalingUrl);
+    const s = new WebSocket(url);
     s.onopen = () => resolve(s);
     s.onerror = () => reject(new Error("WebSocket failed to connect"));
   });
@@ -222,4 +222,159 @@ export async function startSession(hostId: string, handlers: SessionHandlers): P
   };
 
   return { pc, ws, channels, close };
+}
+
+export async function startHostSession(hostId: string, handlers: SessionHandlers, signalingUrl?: string): Promise<ActiveSession> {
+  const url = signalingUrl || import.meta.env.VITE_SIGNALING_URL || "ws://127.0.0.1:8080";
+  handlers.onStatus(`Signaling: ${url}`);
+
+  handlers.onStatus("Requesting screen share... please allow the prompt.");
+  const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  handlers.onVideoStream(displayStream);
+
+  const ws = await new Promise<WebSocket>((resolve, reject) => {
+    const s = new WebSocket(url);
+    s.onopen = () => resolve(s);
+    s.onerror = () => reject(new Error("WebSocket failed to connect"));
+  });
+
+  const iceServers = loadIceServers();
+  const pc = new RTCPeerConnection({ iceServers });
+
+  let chat: RTCDataChannel | null = null;
+  let file: RTCDataChannel | null = null;
+  let ctrl: RTCDataChannel | null = null;
+  let chatReady = false;
+  let fileReady = false;
+
+  const maybeEmitChannelsReady = () => {
+    if (chatReady && fileReady && chat && file && ctrl) {
+      handlers.onDataChannelsReady({ ctrl, chat, file });
+    }
+  };
+
+  pc.ondatachannel = (ev) => {
+    const channel = ev.channel;
+    if (channel.label === CHAT) {
+      chat = channel;
+      chat.onopen = () => {
+        chatReady = true;
+        maybeEmitChannelsReady();
+      };
+      chat.onclose = () => {
+        chatReady = false;
+        handlers.onSessionEnd("Chat channel closed");
+      };
+      chat.onmessage = (ev) => {
+        const text = typeof ev.data === "string" ? ev.data : "";
+        try {
+          const payload = JSON.parse(text) as { type?: string; text?: string };
+          if (payload.type === MessageType.CHAT_TEXT && payload.text) {
+            handlers.onChatText("Client", payload.text);
+          }
+        } catch {
+          /* ignore */
+        }
+      };
+    } else if (channel.label === FILE) {
+      file = channel;
+      file.onopen = () => {
+        fileReady = true;
+        maybeEmitChannelsReady();
+      };
+      file.onclose = () => {
+        fileReady = false;
+        handlers.onSessionEnd("File channel closed");
+      };
+    } else if (channel.label === CTRL) {
+      ctrl = channel;
+      ctrl.onmessage = (ev) => {
+        const text = typeof ev.data === "string" ? ev.data : "";
+        handlers.onControlMessage(text);
+      };
+      ctrl.onclose = () => {
+        handlers.onSessionEnd("Control channel closed");
+      };
+    }
+  };
+
+  displayStream.getTracks().forEach((track) => pc.addTrack(track, displayStream));
+
+  pc.onicecandidate = (ev) => {
+    if (!ev.candidate) return;
+    ws.send(JSON.stringify({ type: MessageType.ICE, ice: ev.candidate.toJSON() }));
+  };
+
+  pc.onconnectionstatechange = () => {
+    const st = pc.connectionState;
+    handlers.onStatus(`Host connection: ${st}`);
+    if (st === "failed") {
+      handlers.onSessionEnd("Host connection failed");
+    }
+  };
+
+  ws.onclose = () => {
+    handlers.onStatus("Signaling socket closed.");
+  };
+  ws.onerror = () => {
+    handlers.onStatus("Signaling socket error.");
+  };
+
+  ws.onmessage = async (ev) => {
+    let data: { type?: string; sdp?: { sdp?: string; type?: RTCSdpType }; ice?: RTCIceCandidateInit };
+    try {
+      data = JSON.parse(ev.data as string);
+    } catch {
+      return;
+    }
+
+    if (data.type === MessageType.HOST_REGISTERED) {
+      handlers.onStatus("Host registered, waiting for client...");
+      return;
+    }
+
+    if (data.type === MessageType.SDP && data.sdp?.sdp && data.sdp.type) {
+      handlers.onStatus("Received client session description");
+      await pc.setRemoteDescription(data.sdp as RTCSessionDescriptionInit);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await waitForIceGatheringComplete(pc);
+      if (pc.localDescription) {
+        ws.send(JSON.stringify({ type: MessageType.SDP, sdp: pc.localDescription }));
+      }
+      handlers.onStatus("Sent host answer");
+      return;
+    }
+
+    if (data.type === MessageType.ICE && data.ice) {
+      try {
+        await pc.addIceCandidate(data.ice);
+      } catch {
+        /* ignore invalid ICE */
+      }
+      return;
+    }
+  };
+
+  ws.send(JSON.stringify({ type: MessageType.REGISTER_HOST, host_id: hostId }));
+
+  const close = () => {
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+    try {
+      displayStream.getTracks().forEach((track) => track.stop());
+    } catch {
+      /* ignore */
+    }
+    try {
+      pc.close();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  return { pc, ws, close };
 }
