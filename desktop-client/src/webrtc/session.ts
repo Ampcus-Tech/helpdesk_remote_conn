@@ -1,33 +1,33 @@
 import { MessageType } from "../protocol";
-
+ 
 export type DataChannels = {
   ctrl: RTCDataChannel;
   chat: RTCDataChannel;
   file: RTCDataChannel;
 };
-
+ 
 export type SessionHandlers = {
   onStatus: (msg: string) => void;
   onVideoStream: (stream: MediaStream) => void;
   onControlOpen: (send: (json: string) => void) => void;
   onControlMessage: (text: string) => void;
   onCursorName: (name: string) => void;
-  onChatText: (sender: string, text: string) => void;
+  onChatText: (sender: "Host" | "You", text: string) => void;
   onDataChannelsReady: (ch: DataChannels) => void;
   onSessionEnd: (reason: string) => void;
 };
-
+ 
 export type ActiveSession = {
   pc: RTCPeerConnection;
   ws: WebSocket;
-  channels?: DataChannels;
+  channels: DataChannels;
   close: () => void;
 };
-
+ 
 const CTRL = "control";
 const CHAT = "chat";
 const FILE = "file";
-
+ 
 async function waitForIceGatheringComplete(pc: RTCPeerConnection, timeoutMs = 15000): Promise<void> {
   if (pc.iceGatheringState === "complete") return;
   await new Promise<void>((resolve) => {
@@ -46,11 +46,11 @@ async function waitForIceGatheringComplete(pc: RTCPeerConnection, timeoutMs = 15
     pc.addEventListener("icegatheringstatechange", onStateChange);
   });
 }
-
+ 
 function defaultIceServers(): RTCIceServer[] {
   return [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
 }
-
+ 
 function loadIceServers(): RTCIceServer[] {
   const raw = import.meta.env.VITE_ICE_SERVERS_JSON;
   if (!raw) return defaultIceServers();
@@ -62,7 +62,7 @@ function loadIceServers(): RTCIceServer[] {
     return defaultIceServers();
   }
 }
-
+ 
 export function sendChatLine(chat: RTCDataChannel, text: string) {
   if (chat.readyState !== "open") return;
   const payload = {
@@ -72,36 +72,36 @@ export function sendChatLine(chat: RTCDataChannel, text: string) {
   };
   chat.send(JSON.stringify(payload));
 }
-
+ 
 /**
  * Start viewer session: WebSocket signaling + WebRTC (matches Python `client/webrtc_client.py` flow).
  */
-export async function startSession(hostId: string, handlers: SessionHandlers, signalingUrl?: string): Promise<ActiveSession> {
-  const url = signalingUrl || import.meta.env.VITE_SIGNALING_URL || "ws://127.0.0.1:8080";
-  handlers.onStatus(`Signaling: ${url}`);
-
+export async function startSession(hostId: string, handlers: SessionHandlers): Promise<ActiveSession> {
+  const signalingUrl = import.meta.env.VITE_SIGNALING_URL || "ws://127.0.0.1:8080";
+  handlers.onStatus(`Signaling: ${signalingUrl}`);
+ 
   const ws = await new Promise<WebSocket>((resolve, reject) => {
-    const s = new WebSocket(url);
+    const s = new WebSocket(signalingUrl);
     s.onopen = () => resolve(s);
     s.onerror = () => reject(new Error("WebSocket failed to connect"));
   });
-
+ 
   const iceServers = loadIceServers();
   const pc = new RTCPeerConnection({ iceServers });
-
+ 
   const ctrl = pc.createDataChannel(CTRL, { ordered: true });
   const chat = pc.createDataChannel(CHAT, { ordered: true });
   const file = pc.createDataChannel(FILE, { ordered: true });
-
+ 
   const channels: DataChannels = { ctrl, chat, file };
-
+ 
   let chatReady = false;
   let fileReady = false;
-
+ 
   const maybeEmitChannelsReady = () => {
     if (chatReady && fileReady) handlers.onDataChannelsReady(channels);
   };
-
+ 
   chat.onopen = () => {
     chatReady = true;
     maybeEmitChannelsReady();
@@ -110,7 +110,7 @@ export async function startSession(hostId: string, handlers: SessionHandlers, si
     chatReady = false;
     handlers.onSessionEnd("chat channel closed");
   };
-
+ 
   file.onopen = () => {
     fileReady = true;
     maybeEmitChannelsReady();
@@ -119,13 +119,13 @@ export async function startSession(hostId: string, handlers: SessionHandlers, si
     fileReady = false;
     handlers.onSessionEnd("file channel closed");
   };
-
+ 
   ctrl.onopen = () => {
     handlers.onControlOpen((json) => {
       if (ctrl.readyState === "open") ctrl.send(json);
     });
   };
-
+ 
   ctrl.onmessage = (ev) => {
     const text = typeof ev.data === "string" ? ev.data : "";
     if (!text) return;
@@ -140,7 +140,7 @@ export async function startSession(hostId: string, handlers: SessionHandlers, si
     }
     handlers.onControlMessage(text);
   };
-
+ 
   chat.onmessage = (ev) => {
     const text = typeof ev.data === "string" ? ev.data : "";
     try {
@@ -152,16 +152,16 @@ export async function startSession(hostId: string, handlers: SessionHandlers, si
       /* ignore */
     }
   };
-
+ 
   pc.addTransceiver("video", { direction: "recvonly" });
-
+ 
   pc.ontrack = (ev) => {
     if (ev.track.kind === "video") {
       const [stream] = ev.streams;
       if (stream) handlers.onVideoStream(stream);
     }
   };
-
+ 
   pc.oniceconnectionstatechange = () => {
     const st = pc.iceConnectionState;
     handlers.onStatus(`ICE: ${st}`);
@@ -169,23 +169,23 @@ export async function startSession(hostId: string, handlers: SessionHandlers, si
       handlers.onSessionEnd("ICE failed");
     }
   };
-
+ 
   ws.send(JSON.stringify({ type: MessageType.FIND_HOST, host_id: hostId }));
-
+ 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   handlers.onStatus("Gathering ICE candidates...");
   await waitForIceGatheringComplete(pc);
   const local = pc.localDescription;
   if (!local?.sdp) throw new Error("Missing local SDP");
-
+ 
   ws.send(JSON.stringify({ type: MessageType.SDP, sdp: { sdp: local.sdp, type: local.type } }));
-
+ 
   const answer = await new Promise<RTCSessionDescriptionInit>((resolve, reject) => {
     const timer = window.setTimeout(() => {
       reject(new Error("Timed out waiting for SDP answer"));
     }, 120_000);
-
+ 
     ws.onmessage = (ev) => {
       let data: { type?: string; sdp?: { sdp?: string; type?: RTCSdpType } };
       try {
@@ -204,10 +204,10 @@ export async function startSession(hostId: string, handlers: SessionHandlers, si
       }
     };
   });
-
+ 
   await pc.setRemoteDescription(answer);
   handlers.onStatus("WebRTC negotiated; waiting for media…");
-
+ 
   const close = () => {
     try {
       ws.close();
@@ -220,161 +220,7 @@ export async function startSession(hostId: string, handlers: SessionHandlers, si
       /* ignore */
     }
   };
-
+ 
   return { pc, ws, channels, close };
 }
-
-export async function startHostSession(hostId: string, handlers: SessionHandlers, signalingUrl?: string): Promise<ActiveSession> {
-  const url = signalingUrl || import.meta.env.VITE_SIGNALING_URL || "ws://127.0.0.1:8080";
-  handlers.onStatus(`Signaling: ${url}`);
-
-  handlers.onStatus("Requesting screen share... please allow the prompt.");
-  const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
-  handlers.onVideoStream(displayStream);
-
-  const ws = await new Promise<WebSocket>((resolve, reject) => {
-    const s = new WebSocket(url);
-    s.onopen = () => resolve(s);
-    s.onerror = () => reject(new Error("WebSocket failed to connect"));
-  });
-
-  const iceServers = loadIceServers();
-  const pc = new RTCPeerConnection({ iceServers });
-
-  let chat: RTCDataChannel | null = null;
-  let file: RTCDataChannel | null = null;
-  let ctrl: RTCDataChannel | null = null;
-  let chatReady = false;
-  let fileReady = false;
-
-  const maybeEmitChannelsReady = () => {
-    if (chatReady && fileReady && chat && file && ctrl) {
-      handlers.onDataChannelsReady({ ctrl, chat, file });
-    }
-  };
-
-  pc.ondatachannel = (ev) => {
-    const channel = ev.channel;
-    if (channel.label === CHAT) {
-      chat = channel;
-      chat.onopen = () => {
-        chatReady = true;
-        maybeEmitChannelsReady();
-      };
-      chat.onclose = () => {
-        chatReady = false;
-        handlers.onSessionEnd("Chat channel closed");
-      };
-      chat.onmessage = (ev) => {
-        const text = typeof ev.data === "string" ? ev.data : "";
-        try {
-          const payload = JSON.parse(text) as { type?: string; text?: string };
-          if (payload.type === MessageType.CHAT_TEXT && payload.text) {
-            handlers.onChatText("Client", payload.text);
-          }
-        } catch {
-          /* ignore */
-        }
-      };
-    } else if (channel.label === FILE) {
-      file = channel;
-      file.onopen = () => {
-        fileReady = true;
-        maybeEmitChannelsReady();
-      };
-      file.onclose = () => {
-        fileReady = false;
-        handlers.onSessionEnd("File channel closed");
-      };
-    } else if (channel.label === CTRL) {
-      ctrl = channel;
-      ctrl.onmessage = (ev) => {
-        const text = typeof ev.data === "string" ? ev.data : "";
-        handlers.onControlMessage(text);
-      };
-      ctrl.onclose = () => {
-        handlers.onSessionEnd("Control channel closed");
-      };
-    }
-  };
-
-  displayStream.getTracks().forEach((track) => pc.addTrack(track, displayStream));
-
-  pc.onicecandidate = (ev) => {
-    if (!ev.candidate) return;
-    ws.send(JSON.stringify({ type: MessageType.ICE, ice: ev.candidate.toJSON() }));
-  };
-
-  pc.onconnectionstatechange = () => {
-    const st = pc.connectionState;
-    handlers.onStatus(`Host connection: ${st}`);
-    if (st === "failed") {
-      handlers.onSessionEnd("Host connection failed");
-    }
-  };
-
-  ws.onclose = () => {
-    handlers.onStatus("Signaling socket closed.");
-  };
-  ws.onerror = () => {
-    handlers.onStatus("Signaling socket error.");
-  };
-
-  ws.onmessage = async (ev) => {
-    let data: { type?: string; sdp?: { sdp?: string; type?: RTCSdpType }; ice?: RTCIceCandidateInit };
-    try {
-      data = JSON.parse(ev.data as string);
-    } catch {
-      return;
-    }
-
-    if (data.type === MessageType.HOST_REGISTERED) {
-      handlers.onStatus("Host registered, waiting for client...");
-      return;
-    }
-
-    if (data.type === MessageType.SDP && data.sdp?.sdp && data.sdp.type) {
-      handlers.onStatus("Received client session description");
-      await pc.setRemoteDescription(data.sdp as RTCSessionDescriptionInit);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await waitForIceGatheringComplete(pc);
-      if (pc.localDescription) {
-        ws.send(JSON.stringify({ type: MessageType.SDP, sdp: pc.localDescription }));
-      }
-      handlers.onStatus("Sent host answer");
-      return;
-    }
-
-    if (data.type === MessageType.ICE && data.ice) {
-      try {
-        await pc.addIceCandidate(data.ice);
-      } catch {
-        /* ignore invalid ICE */
-      }
-      return;
-    }
-  };
-
-  ws.send(JSON.stringify({ type: MessageType.REGISTER_HOST, host_id: hostId }));
-
-  const close = () => {
-    try {
-      ws.close();
-    } catch {
-      /* ignore */
-    }
-    try {
-      displayStream.getTracks().forEach((track) => track.stop());
-    } catch {
-      /* ignore */
-    }
-    try {
-      pc.close();
-    } catch {
-      /* ignore */
-    }
-  };
-
-  return { pc, ws, close };
-}
+ 

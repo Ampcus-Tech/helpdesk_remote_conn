@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import websockets
+from websockets import exceptions as ws_exceptions
 from websockets.server import WebSocketServerProtocol
 import sys
 import os
@@ -106,7 +107,7 @@ async def handle_connection(websocket: WebSocketServerProtocol):
             else:
                 logger.warning(f"Unknown message type: {msg_type}")
 
-    except websockets.exceptions.ConnectionClosed:
+    except ws_exceptions.ConnectionClosed:
         logger.info(f"Connection closed {websocket.remote_address}")
     finally:
         if is_host and connected_host_id in hosts:

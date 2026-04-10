@@ -10,6 +10,7 @@ import cv2
 from aiortc import RTCPeerConnection, RTCSessionDescription, RTCConfiguration, RTCIceServer
 from aiortc import RTCRtpSender
 import websockets
+from websockets import exceptions as ws_exceptions
 
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -450,7 +451,7 @@ class WebRTCClient:
             else:
                 print("REASON: The Signaling Server is not running or port 8080 is blocked by a firewall.")
             print("!" * 60 + "\n")
-        except websockets.exceptions.ConnectionClosed as e:
+        except ws_exceptions.ConnectionClosed as e:
             msg = (
                 f"Signaling WebSocket closed: {e.reason or e} (code {e.code}). "
                 "Often: wrong wss URL, ngrok limit, or host dropped off signaling."
