@@ -57,6 +57,7 @@ function loadIceServers(): RTCIceServer[] {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return defaultIceServers();
+    console.log('Loaded ICE servers:', parsed);
     return parsed as RTCIceServer[];
   } catch {
     return defaultIceServers();
@@ -87,7 +88,7 @@ export async function startSession(hostId: string, handlers: SessionHandlers): P
   });
  
   const iceServers = loadIceServers();
-  const pc = new RTCPeerConnection({ iceServers });
+  const pc = new RTCPeerConnection({ iceServers, iceTransportPolicy: 'all' });
  
   const ctrl = pc.createDataChannel(CTRL, { ordered: true });
   const chat = pc.createDataChannel(CHAT, { ordered: true });
@@ -164,9 +165,18 @@ export async function startSession(hostId: string, handlers: SessionHandlers): P
  
   pc.oniceconnectionstatechange = () => {
     const st = pc.iceConnectionState;
+    console.log('ICE connection state:', st);
     handlers.onStatus(`ICE: ${st}`);
     if (st === "failed") {
       handlers.onSessionEnd("ICE failed");
+    }
+  };
+
+  pc.onicecandidate = (ev) => {
+    if (ev.candidate) {
+      console.log('ICE candidate gathered:', ev.candidate.candidate);
+    } else {
+      console.log('ICE gathering complete');
     }
   };
  

@@ -49,8 +49,8 @@ def _default_ice_servers() -> list[dict]:
         ]
 
     # Metered Open Relay: create your own app at https://www.metered.ca/tools/openrelay/
-    turn_user = os.getenv("TURN_USERNAME", "d398a24c0efc6ba4581dce38")
-    turn_cred = os.getenv("TURN_CREDENTIAL", "QijFwDMhlV3d0uM4")
+    turn_user = os.getenv("TURN_USERNAME", "587951adfe11be5490c837ef")
+    turn_cred = os.getenv("TURN_CREDENTIAL", "bpKpuMJZ0XIBT49m")
     # Latency-first default: prefer UDP relay when available.
     # If your network blocks UDP TURN, set ICE_UDP_TURN_FIRST=0.
     udp_first_env = os.getenv("ICE_UDP_TURN_FIRST", "1").lower()
