@@ -1,9 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { ActiveSession, startSession } from "../webrtc/session";
-
+ 
 export type SessionMode = "idle" | "host" | "client";
-
+ 
 export interface SessionState {
   mode: SessionMode;
   status: string;
@@ -11,7 +11,7 @@ export interface SessionState {
   connected: boolean;
   error: string | null;
 }
-
+ 
 export type SessionEvents = {
   onStatusChange: (status: string) => void;
   onHostIdGenerated: (id: string) => void;
@@ -21,26 +21,26 @@ export type SessionEvents = {
   onVideoStream: (stream: MediaStream) => void;
   onCursorChange: (name: string) => void;
 };
-
+ 
 class SessionManager {
   private mode: SessionMode = "idle";
   private jsSession: ActiveSession | null = null;
   private unlisteners: UnlistenFn[] = [];
   private events: Partial<SessionEvents> = {};
-
+ 
   setEvents(events: SessionEvents) {
     this.events = events;
   }
-
+ 
   async startHost() {
     this.mode = "host";
     this.events.onStatusChange?.("Starting python host...");
-
+ 
     // Setup listeners for python output
     const un1 = await listen<string>("host-stdout", (event) => {
       const line = event.payload;
       console.log("Python stdout:", line);
-      
+     
       if (line.includes("UI_SIGNAL:HOST_ID:")) {
         const id = line.split("UI_SIGNAL:HOST_ID:")[1].trim();
         this.events.onHostIdGenerated?.(id);
@@ -59,7 +59,7 @@ class SessionManager {
         }
       }
     });
-
+ 
     const un2 = await listen<string>("host-stderr", (event) => {
       const line = event.payload;
       console.error("Python stderr:", line);
@@ -68,16 +68,16 @@ class SessionManager {
         this.events.onStatusChange?.(`Host Error: ${line}`);
       }
     });
-
+ 
     this.unlisteners.push(un1, un2);
-
+ 
     try {
       await invoke("start_host");
     } catch (e) {
       this.events.onStatusChange?.(`Failed to start host: ${e}`);
     }
   }
-
+ 
   async stopHost() {
     try {
       await invoke("stop_host");
@@ -86,11 +86,11 @@ class SessionManager {
     }
     this.cleanup();
   }
-
+ 
   async startClient(hostId: string) {
     this.mode = "client";
     this.events.onStatusChange?.("Connecting to host...");
-
+ 
     try {
       this.jsSession = await startSession(hostId, {
         onStatus: (msg) => this.events.onStatusChange?.(msg),
@@ -102,6 +102,8 @@ class SessionManager {
         onDataChannelsReady: (ch) => {
           this.events.onStatusChange?.("Connected to host");
           this.events.onConnected?.();
+          // Start the global input helper when channels are ready
+          void this.startInputHelper();
         },
         onSessionEnd: (reason) => {
           this.events.onDisconnected?.(reason);
@@ -113,19 +115,54 @@ class SessionManager {
       this.cleanup();
     }
   }
-
+ 
   async stopClient() {
+    this.stopInputHelper().catch(console.error);
     this.jsSession?.close();
     this.jsSession = null;
     this.cleanup();
   }
-
+ 
+  private async startInputHelper() {
+    console.log("Starting input helper...");
+   
+    // Listen for helper output
+    const un = await listen<string>("input-helper-stdout", (event) => {
+      try {
+        const data = JSON.parse(event.payload);
+        if (this.jsSession?.channels.ctrl.readyState === "open") {
+          this.jsSession.channels.ctrl.send(JSON.stringify({
+            type: "keyboard",
+            key: data.key,
+            pressed: data.pressed
+          }));
+        }
+      } catch (e) {
+      }
+    });
+    this.unlisteners.push(un);
+ 
+    try {
+      await invoke("start_input_helper");
+    } catch (e) {
+      console.error("Failed to start input helper:", e);
+    }
+  }
+ 
+  private async stopInputHelper() {
+    try {
+      await invoke("stop_input_helper");
+    } catch (e) {
+      console.error("Failed to stop input helper:", e);
+    }
+  }
+ 
   private cleanup() {
     this.mode = "idle";
     this.unlisteners.forEach((u) => u());
     this.unlisteners = [];
   }
-
+ 
   // Helper for sending chat via active JS session
   sendChat(text: string) {
     if (this.jsSession?.channels.chat) {
@@ -137,11 +174,11 @@ class SessionManager {
           this.jsSession.channels.chat.send(JSON.stringify(payload));
     }
   }
-
+ 
   getActiveSession() {
     return this.jsSession;
   }
 }
-
+ 
 export const sessionManager = new SessionManager();
 export default sessionManager;
