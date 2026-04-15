@@ -7,4 +7,6 @@ Pillow>=10.0.0
 aiohttp>=3.8.4
 rumps>=0.4.0; sys_platform == "darwin"
 pyobjc-framework-Cocoa>=10.0; sys_platform == "darwin"
+pyobjc>=9.0; sys_platform == "darwin"
+ewmh>=0.1.6; sys_platform == "linux"
 PyQt6>=6.7.0

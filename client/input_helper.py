@@ -50,32 +50,49 @@ class InputHelper:
         self._stop_event = threading.Event()
         
     def _is_target_window_foreground(self) -> bool:
-        if platform.system() != "Windows":
-            return True # Default to capturing if not on Windows for now
-            
-        try:
-            user32 = ctypes.windll.user32
-            hwnd = user32.GetForegroundWindow()
-            if not hwnd: return False
-            
-            length = user32.GetWindowTextLengthW(hwnd)
-            title_buf = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(hwnd, title_buf, length + 1)
-            title = (title_buf.value or "").strip()
-            
-            # Match Tauri app title. Check for exact match or partial matches
-            title_lower = title.lower()
-            return (self._window_name.lower() in title_lower or 
-                   "remote desktop" in title_lower or 
-                   "helpdesk" in title_lower or
-                   "remote" in title_lower)
-        except Exception:
-            return False
+        system = platform.system()
+        if system == "Windows":
+            try:
+                user32 = ctypes.windll.user32
+                hwnd = user32.GetForegroundWindow()
+                if not hwnd: return False
+                
+                length = user32.GetWindowTextLengthW(hwnd)
+                title_buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, title_buf, length + 1)
+                title = (title_buf.value or "").strip()
+                
+                # Match Tauri app title. Check for exact match or partial matches
+                title_lower = title.lower()
+                return (self._window_name.lower() in title_lower or 
+                       "remote desktop" in title_lower or 
+                       "helpdesk" in title_lower or
+                       "remote" in title_lower)
+            except Exception:
+                return False
+        elif system == "Darwin":  # macOS
+            try:
+                from AppKit import NSWorkspace
+                active_app = NSWorkspace.sharedWorkspace().activeApplication()
+                if active_app and 'remote-desktop' in active_app['NSApplicationName'].lower():
+                    return True
+                return False
+            except ImportError:
+                return True  # Fallback if PyObjC isn't available
+        elif system == "Linux":
+            try:
+                from ewmh import EWMH
+                ewmh = EWMH()
+                active_window = ewmh.getActiveWindow()
+                if active_window:
+                    title = ewmh.getWmName(active_window).decode('utf-8', errors='ignore')
+                    return 'remote desktop' in title.lower()
+                return False
+            except ImportError:
+                return True  # Fallback
+        return True  # Default for other systems
 
     def _on_press(self, key):
-        if not self._is_target_window_foreground():
-            return # Don't capture/suppress if not in focus
-            
         name = _normalize_key(key)
         if name and name not in self._pressed_keys:
             self._pressed_keys.add(name)
@@ -88,21 +105,38 @@ class InputHelper:
             print(json.dumps({"key": name, "pressed": False}), flush=True)
 
     def run(self):
-        # We use suppress=True to capture system shortcuts like Alt+Tab on Windows
-        # Focus gating is handled Inside the callbacks.
-        # NOTE: pynput's suppress=True on Windows hooks at a low level.
-        self._listener = KeyboardListener(
-            on_press=self._on_press,
-            on_release=self._on_release,
-            suppress=True
-        )
-        self._listener.start()
+        listener_running = False
+        
+        def focus_checker():
+            nonlocal listener_running
+            while not self._stop_event.is_set():
+                is_focused = self._is_target_window_foreground()
+                if is_focused and not listener_running:
+                    # Start listener
+                    self._listener = KeyboardListener(
+                        on_press=self._on_press,
+                        on_release=self._on_release,
+                        suppress=True
+                    )
+                    self._listener.start()
+                    listener_running = True
+                elif not is_focused and listener_running:
+                    # Stop listener
+                    if self._listener:
+                        self._listener.stop()
+                        self._listener = None
+                    listener_running = False
+                time.sleep(0.1)  # Check every 100ms
+        
+        focus_thread = threading.Thread(target=focus_checker, daemon=True)
+        focus_thread.start()
         
         try:
             while not self._stop_event.is_set():
                 time.sleep(0.1)
         finally:
-            self._listener.stop()
+            if self._listener:
+                self._listener.stop()
 
 if __name__ == "__main__":
     helper = InputHelper()
