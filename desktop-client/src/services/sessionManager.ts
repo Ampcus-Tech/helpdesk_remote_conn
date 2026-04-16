@@ -20,6 +20,7 @@ export type SessionEvents = {
   onChatReceived: (who: string, text: string) => void;
   onVideoStream: (stream: MediaStream) => void;
   onCursorChange: (name: string) => void;
+  onHostWarning: (msg: string) => void;
 };
  
 class SessionManager {
@@ -44,6 +45,12 @@ class SessionManager {
       if (line.includes("UI_SIGNAL:HOST_ID:")) {
         const id = line.split("UI_SIGNAL:HOST_ID:")[1].trim();
         this.events.onHostIdGenerated?.(id);
+      } else if (line.includes("UI_SIGNAL:WARN:")) {
+        const warn = line.split("UI_SIGNAL:WARN:")[1].trim();
+        this.events.onHostWarning?.(warn);
+      } else if (line.includes("UI_SIGNAL:ERROR:")) {
+        const err = line.split("UI_SIGNAL:ERROR:")[1].trim();
+        this.events.onStatusChange?.(`Host Error: ${err}`);
       } else if (line.includes("SESSION_CONNECTED")) {
         this.events.onStatusChange?.("Client connected");
         this.events.onConnected?.();

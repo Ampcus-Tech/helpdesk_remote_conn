@@ -37,6 +37,10 @@ export default function App() {
   const [chatOpen, setChatOpen] = useState(true);
   const [chatLines, setChatLines] = useState<{ who: string; text: string }[]>([]);
   const [cursorName, setCursorName] = useState("arrow");
+  const swapModifiers = useMemo(() => {
+    return typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
+  }, []);
+  const [hostWarning, setHostWarning] = useState<string | null>(null);
  
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -62,6 +66,7 @@ export default function App() {
  
   const disconnect = useCallback(() => {
     releaseAllKeys();
+    setHostWarning(null);
     if (moveTimer.current != null) {
       window.clearTimeout(moveTimer.current);
       moveTimer.current = null;
@@ -107,6 +112,7 @@ export default function App() {
         }
       },
       onCursorChange: setCursorName,
+      onHostWarning: setHostWarning,
     });
   }, [disconnect]);
  
@@ -290,7 +296,7 @@ export default function App() {
  
   const onKey = (e: React.KeyboardEvent) => {
     if (!ctrlSendRef.current) return;
-    const mk = mapKeyboardEvent(e.nativeEvent);
+    const mk = mapKeyboardEvent(e.nativeEvent, { swapModifiers });
     if (!mk) return;
     e.preventDefault();
     if (mk.pressed) pressedKeys.current.add(mk.key);
@@ -315,14 +321,6 @@ export default function App() {
         </div>
       ) : (
         <div style={{ display: 'flex', width: '100%', height: '100%' }}>
-            <div style={{ flex: 1, position: 'relative' }}>
-                <button
-                  style={{ position: 'absolute', top: 10, left: 10, zIndex: 100, padding: '4px 8px', fontSize: '12px' }}
-                  onClick={disconnect}
-                >
-                  Back to Menu
-                </button>
- 
                 {mode === "host" ? (
                     <HostPanel
                         hostId={hostId}
@@ -330,6 +328,8 @@ export default function App() {
                         running={mode === "host"}
                         onStart={startHost}
                         onStop={disconnect}
+                        warning={hostWarning}
+                        onBack={disconnect}
                     />
                 ) : (
                     <ClientPanel
@@ -350,9 +350,9 @@ export default function App() {
                         onDoubleClick={onDoubleClick}
                         onKey={onKey}
                         releaseAllKeys={releaseAllKeys}
+                        onBack={disconnect}
                     />
                 )}
-            </div>
  
             {chatOpen && (
                 <ChatPanel
