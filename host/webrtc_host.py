@@ -191,6 +191,12 @@ class WebRTCHost:
         def on_datachannel(channel):
             logger.info(f"Data channel {channel.label} received")
             if channel.label == CTRL_CHANNEL_NAME:
+                @channel.on("open")
+                def on_ctrl_open():
+                    logger.info("Control channel opened. Sending host info.")
+                    msg = ControlMessage(type=MessageType.HOST_INFO, os=platform.system())
+                    channel.send(msg.to_json())
+
                 # Start tracking host cursor shape to sync with client
                 if self._cursor_task and not self._cursor_task.done():
                     self._cursor_task.cancel()

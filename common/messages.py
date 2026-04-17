@@ -24,6 +24,7 @@ class MessageType:
     FILE_START = "file_start"
     FILE_CHUNK = "file_chunk"
     FILE_END = "file_end"
+    HOST_INFO = "host_info"
 
 @dataclass
 class SignalingMessage:
@@ -60,6 +61,7 @@ class ControlMessage:
     # Quality
     quality: Optional[str] = None
     cursor_name: Optional[str] = None
+    os: Optional[str] = None
 
     def to_json(self) -> str:
         return json.dumps({k: v for k, v in asdict(self).items() if v is not None})

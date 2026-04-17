@@ -37,9 +37,13 @@ export default function App() {
   const [chatOpen, setChatOpen] = useState(true);
   const [chatLines, setChatLines] = useState<{ who: string; text: string }[]>([]);
   const [cursorName, setCursorName] = useState("arrow");
+  const [remoteOS, setRemoteOS] = useState<string | null>(null);
   const swapModifiers = useMemo(() => {
-    return typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
-  }, []);
+    const localIsMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
+    const remoteIsMac = remoteOS === "Darwin";
+    // Swap if one is Mac and the other is not (Windows/Linux)
+    return localIsMac !== remoteIsMac;
+  }, [remoteOS]);
   const [hostWarning, setHostWarning] = useState<string | null>(null);
  
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -113,6 +117,7 @@ export default function App() {
       },
       onCursorChange: setCursorName,
       onHostWarning: setHostWarning,
+      onHostInfo: setRemoteOS,
     });
   }, [disconnect]);
  

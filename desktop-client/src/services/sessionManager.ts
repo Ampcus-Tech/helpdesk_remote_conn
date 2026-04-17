@@ -21,6 +21,7 @@ export type SessionEvents = {
   onVideoStream: (stream: MediaStream) => void;
   onCursorChange: (name: string) => void;
   onHostWarning: (msg: string) => void;
+  onHostInfo: (os: string) => void;
 };
  
 class SessionManager {
@@ -106,6 +107,10 @@ class SessionManager {
         onControlMessage: () => {},
         onCursorName: (name) => this.events.onCursorChange?.(name),
         onChatText: (who, text) => this.events.onChatReceived?.(who, text),
+        onHostInfo: (os) => {
+          console.log("Remote Host OS:", os);
+          this.events.onHostInfo?.(os);
+        },
         onDataChannelsReady: (ch) => {
           this.events.onStatusChange?.("Connected to host");
           this.events.onConnected?.();
