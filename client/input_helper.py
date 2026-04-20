@@ -47,6 +47,7 @@ class InputHelper:
         self._pressed_keys = set()
         self._listener = None
         self._window_name = "Remote Desktop Client" # Default Tauri app name from index.html title
+        self._window_name_lower = self._window_name.lower()
         self._stop_event = threading.Event()
         
     def _is_target_window_foreground(self) -> bool:
@@ -64,10 +65,7 @@ class InputHelper:
                 
                 # Match Tauri app title. Check for exact match or partial matches
                 title_lower = title.lower()
-                return (self._window_name.lower() in title_lower or 
-                       "remote desktop" in title_lower or 
-                       "helpdesk" in title_lower or
-                       "remote" in title_lower)
+                return title_lower == self._window_name_lower or title_lower.startswith(f"{self._window_name_lower} -")
             except Exception:
                 return False
         elif system == "Darwin":  # macOS
