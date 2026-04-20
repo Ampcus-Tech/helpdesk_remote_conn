@@ -112,6 +112,8 @@ class WebRTCHost:
         self._chat_opened = False
         self._file_opened = False
         self._channels_ready = False
+        self._file_msg_queue = asyncio.Queue()
+        self._file_worker_task = None
         
         # Cursor tracking state (Cross-platform ready)
         self._cursor_handles = {}
@@ -228,11 +230,21 @@ class WebRTCHost:
             pass
 
     def _emit_file_progress(self, file_name: str, transferred: int, total: int, direction: str) -> None:
-        try:
-            if self.on_file_progress:
-                self.on_file_progress(file_name, transferred, total, direction)
-        except Exception:
-            pass
+        import time
+        if not hasattr(self, '_last_progress_emit'):
+            self._last_progress_emit = {}
+        
+        now = time.time()
+        key = f"{file_name}_{direction}"
+        
+        # Only emit every 0.1s or on completion to prevent stdout/UI lag
+        if transferred >= total or (now - self._last_progress_emit.get(key, 0) > 0.1):
+            self._last_progress_emit[key] = now
+            try:
+                if self.on_file_progress:
+                    self.on_file_progress(file_name, transferred, total, direction)
+            except Exception:
+                pass
 
     def _emit_file_done(self, file_name: str, path: str, direction: str) -> None:
         try:
@@ -277,6 +289,9 @@ class WebRTCHost:
             self._check_data_channels_ready()
 
     def _setup_file_channel(self, channel):
+        if not self._file_worker_task or self._file_worker_task.done():
+            self._file_worker_task = asyncio.create_task(self._file_worker_loop())
+
         @channel.on("open")
         def _on_file_open():
             self._file_opened = True
@@ -290,8 +305,20 @@ class WebRTCHost:
 
         @channel.on("message")
         def on_message(message):
+            self._file_msg_queue.put_nowait(message)
+
+        # If channel is already open before handlers are attached, mark ready immediately.
+        if channel.readyState == "open":
+            self._file_opened = True
+            self._check_data_channels_ready()
+
+    async def _file_worker_loop(self):
+        while True:
             try:
-                payload = json.loads(message)
+                message = await self._file_msg_queue.get()
+                
+                # Offload JSON parsing to thread pool to prevent blocking asyncio loop
+                payload = await asyncio.to_thread(json.loads, message)
                 msg_type = payload.get("type")
 
                 if msg_type == MessageType.FILE_OFFER:
@@ -300,7 +327,6 @@ class WebRTCHost:
                     file_size = int(payload["file_size"])
                     self._incoming_offers[file_id] = {"file_name": file_name, "file_size": file_size}
                     if self.on_file_offer:
-                        # Non-blocking UI prompt flow; UI must call respond_file_offer().
                         self.on_file_offer(file_id, file_name, file_size)
 
                 elif msg_type == MessageType.FILE_ACCEPT:
@@ -314,9 +340,14 @@ class WebRTCHost:
                     file_id = payload["file_id"]
                     target_path = self._incoming_targets.get(file_id)
                     if not target_path:
-                        return
-                    os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
-                    fh = open(target_path, "wb")
+                        self._file_msg_queue.task_done()
+                        continue
+                        
+                    def open_file():
+                        os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
+                        return open(target_path, "wb")
+                        
+                    fh = await asyncio.to_thread(open_file)
                     self._incoming_files[file_id] = {
                         "fh": fh,
                         "name": payload["file_name"],
@@ -329,10 +360,16 @@ class WebRTCHost:
                     file_id = payload["file_id"]
                     file_state = self._incoming_files.get(file_id)
                     if not file_state:
-                        return
-                    chunk = base64.b64decode(payload["chunk_b64"])
-                    file_state["fh"].write(chunk)
-                    file_state["written"] += len(chunk)
+                        self._file_msg_queue.task_done()
+                        continue
+                        
+                    def process_chunk():
+                        chunk = base64.b64decode(payload["chunk_b64"])
+                        file_state["fh"].write(chunk)
+                        return len(chunk)
+
+                    chunk_len = await asyncio.to_thread(process_chunk)
+                    file_state["written"] += chunk_len
                     self._emit_file_progress(file_state["name"], file_state["written"], file_state["size"], "recv")
 
                 elif msg_type == MessageType.FILE_END:
@@ -341,16 +378,21 @@ class WebRTCHost:
                     self._incoming_targets.pop(file_id, None)
                     self._incoming_offers.pop(file_id, None)
                     if not file_state:
-                        return
-                    file_state["fh"].close()
+                        self._file_msg_queue.task_done()
+                        continue
+                        
+                    def close_file():
+                        file_state["fh"].close()
+                        
+                    await asyncio.to_thread(close_file)
                     self._emit_file_done(file_state["name"], file_state["path"], "recv")
+                    
+                self._file_msg_queue.task_done()
+            except asyncio.CancelledError:
+                break
             except Exception as e:
-                logger.error(f"File channel message error: {e}")
-
-        # If channel is already open before handlers are attached, mark ready immediately.
-        if channel.readyState == "open":
-            self._file_opened = True
-            self._check_data_channels_ready()
+                logger.error(f"File worker error: {e}")
+                await asyncio.sleep(0.01)
 
     def send_chat(self, text: str) -> None:
         if not text.strip() or not self.chat_channel or self.chat_channel.readyState != "open":
@@ -392,21 +434,41 @@ class WebRTCHost:
         }))
 
         sent = 0
-        with open(file_path, "rb") as fh:
+        def open_file():
+            return open(file_path, "rb")
+        
+        fh = await asyncio.to_thread(open_file)
+        
+        try:
             while True:
-                chunk = fh.read(chunk_size)
+                def read_chunk():
+                    return fh.read(chunk_size)
+                    
+                chunk = await asyncio.to_thread(read_chunk)
                 if not chunk:
                     break
-                while self.file_channel.bufferedAmount > (4 * 1024 * 1024):
+                    
+                # Reduce bufferedAmount threshold from 4MB to 256KB to avoid SCTP buffer bloat
+                while self.file_channel.bufferedAmount > (256 * 1024):
                     await asyncio.sleep(0.01)
-                self.file_channel.send(json.dumps({
-                    "type": MessageType.FILE_CHUNK,
-                    "file_id": file_id,
-                    "chunk_b64": base64.b64encode(chunk).decode("ascii"),
-                }))
+                    
+                def encode_chunk():
+                    return json.dumps({
+                        "type": MessageType.FILE_CHUNK,
+                        "file_id": file_id,
+                        "chunk_b64": base64.b64encode(chunk).decode("ascii"),
+                    })
+                    
+                msg = await asyncio.to_thread(encode_chunk)
+                self.file_channel.send(msg)
+                
                 sent += len(chunk)
                 self._emit_file_progress(file_name, sent, file_size, "send")
-                await asyncio.sleep(0)
+                
+                # Sleep a tiny bit to avoid completely starving the event loop
+                await asyncio.sleep(0.01)
+        finally:
+            await asyncio.to_thread(fh.close)
 
         self.file_channel.send(json.dumps({"type": MessageType.FILE_END, "file_id": file_id}))
         self._emit_file_done(file_name, file_path, "send")
@@ -623,12 +685,19 @@ class WebRTCHost:
         except asyncio.CancelledError:
             pass
         finally:
+            if self.input_receiver:
+                try:
+                    self.input_receiver.release_all_modifiers()
+                except:
+                    pass
             if self._input_worker_task:
                 self._input_worker_task.cancel()
             if self._cursor_task:
                 self._cursor_task.cancel()
             if self._command_task:
                 self._command_task.cancel()
+            if hasattr(self, '_file_worker_task') and self._file_worker_task:
+                self._file_worker_task.cancel()
             if self.pc:
                 await self.pc.close()
             if self.ws:

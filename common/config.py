@@ -48,16 +48,11 @@ def _default_ice_servers() -> list[dict]:
             }
         ]
 
-    # Metered Open Relay: create your own app at https://www.metered.ca/tools/openrelay/
-    turn_user = os.getenv("TURN_USERNAME", "587951adfe11be5490c837ef")
-    turn_cred = os.getenv("TURN_CREDENTIAL", "bpKpuMJZ0XIBT49m")
-    # Latency-first default: prefer UDP relay when available.
-    # If your network blocks UDP TURN, set ICE_UDP_TURN_FIRST=0.
-    udp_first_env = os.getenv("ICE_UDP_TURN_FIRST", "1").lower()
-    if udp_first_env in ("1", "true", "yes"):
-        turn_urls = _metered_turn_urls_udp_first()
-    else:
-        turn_urls = _metered_turn_urls_tcp_first()
+    # ExpressTurn TURN server
+    turn_user = os.getenv("TURN_USERNAME", "000000002091522595")
+    turn_cred = os.getenv("TURN_CREDENTIAL", "aQuvdZvnTQppNdueNhrJq/q6u3o=")
+    turn_urls = ["turn:free.expressturn.com:3478"]
+    
     return [
         {
             "urls": [
