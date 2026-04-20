@@ -101,86 +101,170 @@ export function respondFileOffer(fileChannel: RTCDataChannel, fileId: string, ac
 }
  
 export async function sendFile(fileChannel: RTCDataChannel, file: File, onProgress: (p: number) => void) {
-  if (fileChannel.readyState !== "open") return;
- 
+  if (fileChannel.readyState !== "open") {
+    console.error("File channel not ready", fileChannel.readyState);
+    return false;
+  }
+
   const fileId = Math.random().toString(36).substring(2, 15);
   const fileName = file.name;
   const fileSize = file.size;
- 
-  // Send offer
-  fileChannel.send(JSON.stringify({
-    type: MessageType.FILE_OFFER,
-    file_id: fileId,
-    file_name: fileName,
-    file_size: fileSize
-  }));
- 
-  // Wait for acceptance
+  
+  console.log(`Sending file: ${fileName} (${fileSize} bytes)`);
+
+  try {
+    // Send offer
+    if (fileChannel.readyState !== "open") {
+      console.error("File channel closed before sending offer");
+      return false;
+    }
+    fileChannel.send(JSON.stringify({
+      type: MessageType.FILE_OFFER,
+      file_id: fileId,
+      file_name: fileName,
+      file_size: fileSize
+    }));
+    console.log(`File offer sent for ${fileId}`);
+  } catch (e: unknown) {
+    console.error("Failed to send file offer:", e);
+    return false;
+  }
+
+  // Wait for acceptance (with shorter timeout for better responsiveness)
   const accepted = await new Promise<boolean>((resolve) => {
     pendingOutgoingAccept[fileId] = resolve;
-    // Timeout after 60s
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       if (pendingOutgoingAccept[fileId]) {
         delete pendingOutgoingAccept[fileId];
+        console.error("File offer timed out");
         resolve(false);
       }
-    }, 60000);
+    }, 30000);
+    
+    // Also resolve if channel closes
+    const onClose = () => {
+      if (pendingOutgoingAccept[fileId]) {
+        delete pendingOutgoingAccept[fileId];
+        clearTimeout(timer);
+        console.error("File channel closed while waiting for acceptance");
+        resolve(false);
+      }
+    };
+    fileChannel.addEventListener("close", onClose, { once: true });
   });
- 
-  if (!accepted) return false;
- 
+
+  if (!accepted) {
+    console.error("File offer not accepted");
+    return false;
+  }
+  
+  console.log(`File offer accepted for ${fileId}`);
+
   // Send start
-  const chunkSize = 64 * 1024;
-  fileChannel.send(JSON.stringify({
-    type: MessageType.FILE_START,
-    file_id: fileId,
-    file_name: fileName,
-    file_size: fileSize,
-    chunk_size: chunkSize
-  }));
- 
+  const chunkSize = 16 * 1024; // Reduced from 64KB to 16KB for better compatibility
+  try {
+    if (fileChannel.readyState !== "open") {
+      console.error("File channel closed before sending start");
+      return false;
+    }
+    fileChannel.send(JSON.stringify({
+      type: MessageType.FILE_START,
+      file_id: fileId,
+      file_name: fileName,
+      file_size: fileSize,
+      chunk_size: chunkSize
+    }));
+    console.log(`File start sent, chunk size: ${chunkSize}`);
+  } catch (e: unknown) {
+    console.error("Failed to send file start:", e);
+    return false;
+  }
+  
   // Send chunks
   let sent = 0;
   const reader = file.stream().getReader();
+  let chunkCount = 0;
   
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
- 
-    let offset = 0;
-    while (offset < value.length) {
-      const end = Math.min(offset + chunkSize, value.length);
-      const chunk = value.slice(offset, end);
-      
-      // Wait if buffer is full
-      while (fileChannel.bufferedAmount > 4 * 1024 * 1024) {
-        await new Promise(r => setTimeout(r, 10));
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+   
+      let offset = 0;
+      while (offset < value.length) {
+        // Check channel is still open
+        if (fileChannel.readyState !== "open") {
+          console.error("File channel closed before sending chunk", chunkCount);
+          return false;
+        }
+        
+        const end = Math.min(offset + chunkSize, value.length);
+        const chunk = value.slice(offset, end);
+        
+        // Backpressure: wait if buffer is getting full
+        if (fileChannel.bufferedAmount > 2 * 1024 * 1024) { // 2MB threshold
+          let drainWaits = 0;
+          while (fileChannel.bufferedAmount > 2 * 1024 * 1024 && fileChannel.readyState === "open") {
+            await new Promise(r => setTimeout(r, 10));
+            drainWaits++;
+            if (drainWaits > 300) { // ~3s timeout
+              console.error("Buffer drain timeout");
+              return false;
+            }
+          }
+        }
+   
+        // Fast base64 encoding using native btoa (much faster than FileReader)
+        let base64 = "";
+        try {
+          // Convert Uint8Array to binary string, then encode
+          base64 = btoa(String.fromCharCode.apply(null, Array.from(chunk)));
+        } catch (e: unknown) {
+          console.error("Failed to encode chunk to base64:", e);
+          return false;
+        }
+   
+        try {
+          fileChannel.send(JSON.stringify({
+            type: MessageType.FILE_CHUNK,
+            file_id: fileId,
+            chunk_b64: base64
+          }));
+          chunkCount++;
+        } catch (e: unknown) {
+          console.error(`Failed to send file chunk ${chunkCount}:`, e);
+          return false;
+        }
+   
+        sent += chunk.length;
+        onProgress(sent);
+        offset = end;
+        
+        // Yield to browser every 20 chunks to prevent UI blocking
+        if (chunkCount % 20 === 0) {
+          await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        }
       }
- 
-      // Convert chunk to base64 (matching Python implementation)
-      const base64 = await new Promise<string>((resolve) => {
-        const r = new FileReader();
-        r.onload = () => resolve((r.result as string).split(',')[1]);
-        r.readAsDataURL(new Blob([chunk]));
-      });
- 
-      fileChannel.send(JSON.stringify({
-        type: MessageType.FILE_CHUNK,
-        file_id: fileId,
-        chunk_b64: base64
-      }));
- 
-      sent += chunk.length;
-      onProgress(sent);
-      offset = end;
     }
+  } finally {
+    reader.releaseLock();
   }
  
-  // Send end
-  fileChannel.send(JSON.stringify({
-    type: MessageType.FILE_END,
-    file_id: fileId
-  }));
+  // Send end message
+  try {
+    if (fileChannel.readyState !== "open") {
+      console.error("File channel closed before sending end");
+      return false;
+    }
+    fileChannel.send(JSON.stringify({
+      type: MessageType.FILE_END,
+      file_id: fileId
+    }));
+    console.log(`File transfer complete: ${fileId}, ${chunkCount} chunks, ${sent} bytes`);
+  } catch (e: unknown) {
+    console.error("Failed to send file end:", e);
+    return false;
+  }
  
   return true;
 }
@@ -323,7 +407,7 @@ export async function startSession(hostId: string, handlers: SessionHandlers): P
           delete incomingFiles[payload.file_id];
         }
       }
-    } catch (e) {
+    } catch (e: unknown) {
       console.error("File channel error:", e);
     }
   };

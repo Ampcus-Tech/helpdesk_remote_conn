@@ -103,7 +103,7 @@ class SessionManager {
  
     try {
       await invoke("start_host");
-    } catch (e) {
+    } catch (e: unknown) {
       this.events.onStatusChange?.(`Failed to start host: ${e}`);
     }
   }
@@ -111,7 +111,7 @@ class SessionManager {
   async stopHost() {
     try {
       await invoke("stop_host");
-    } catch (e) {
+    } catch (e: unknown) {
       console.error(e);
     }
     this.cleanup();
@@ -147,7 +147,7 @@ class SessionManager {
           this.cleanup();
         },
       });
-    } catch (e) {
+    } catch (e: unknown) {
       this.events.onStatusChange?.(e instanceof Error ? e.message : String(e));
       this.cleanup();
     }
@@ -175,15 +175,20 @@ class SessionManager {
             pressed: data.pressed
           }));
         }
-      } catch (e) {
+      } catch (e: unknown) {
+        // Silently ignore parse errors
       }
     });
     this.unlisteners.push(un);
  
     try {
       await invoke("start_input_helper");
-    } catch (e) {
+      console.log("Input helper started successfully");
+    } catch (e: unknown) {
       console.error("Failed to start input helper:", e);
+      // Remove the listener if starting failed
+      un();
+      this.unlisteners = this.unlisteners.filter(l => l !== un);
     }
   }
  
@@ -191,7 +196,7 @@ class SessionManager {
     this.inputHelperPaused = !active;
     try {
       await invoke("set_input_helper_active", { active });
-    } catch (e) {
+    } catch (e: unknown) {
       console.error("Failed to set input helper state:", e);
     }
   }
@@ -199,8 +204,13 @@ class SessionManager {
   private async stopInputHelper() {
     try {
       await invoke("stop_input_helper");
-    } catch (e) {
-      console.error("Failed to stop input helper:", e);
+      console.log("Input helper stopped successfully");
+    } catch (e: unknown) {
+      // It's ok if the helper wasn't running
+      const errorStr = String(e);
+      if (!errorStr.includes("not running")) {
+        console.error("Error stopping input helper:", e);
+      }
     }
   }
  

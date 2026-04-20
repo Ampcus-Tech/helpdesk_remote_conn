@@ -6,10 +6,10 @@ import threading
 import ctypes
 import platform
 from pynput.keyboard import Listener as KeyboardListener, Key, KeyCode
-
+ 
 # Add parent dir to path to import common
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
+ 
 def _normalize_key(key):
     if isinstance(key, KeyCode):
         if key.char:
@@ -19,7 +19,7 @@ def _normalize_key(key):
                 return chr(ord(char) + 96)
             return char.lower()
         return None
-
+ 
     if isinstance(key, Key):
         name = str(key).replace("Key.", "")
         aliases = {
@@ -41,7 +41,7 @@ def _normalize_key(key):
         if name.startswith("f") and name[1:].isdigit():
             return name
     return None
-
+ 
 class InputHelper:
     def __init__(self):
         self._pressed_keys = set()
@@ -49,7 +49,9 @@ class InputHelper:
         self._window_name = "Remote Desktop Client" # Default Tauri app name from index.html title
         self._window_name_lower = self._window_name.lower()
         self._stop_event = threading.Event()
-        
+        self._active = True
+        self._state_lock = threading.Lock()
+       
     def _is_target_window_foreground(self) -> bool:
         system = platform.system()
         if system == "Windows":
@@ -57,12 +59,12 @@ class InputHelper:
                 user32 = ctypes.windll.user32
                 hwnd = user32.GetForegroundWindow()
                 if not hwnd: return False
-                
+               
                 length = user32.GetWindowTextLengthW(hwnd)
                 title_buf = ctypes.create_unicode_buffer(length + 1)
                 user32.GetWindowTextW(hwnd, title_buf, length + 1)
                 title = (title_buf.value or "").strip()
-                
+               
                 # Match Tauri app title. Check for exact match or partial matches
                 title_lower = title.lower()
                 return title_lower == self._window_name_lower or title_lower.startswith(f"{self._window_name_lower} -")
@@ -89,53 +91,94 @@ class InputHelper:
             except ImportError:
                 return True  # Fallback
         return True  # Default for other systems
-
+ 
     def _on_press(self, key):
         name = _normalize_key(key)
         if name and name not in self._pressed_keys:
             self._pressed_keys.add(name)
             print(json.dumps({"key": name, "pressed": True}), flush=True)
-
+ 
     def _on_release(self, key):
         name = _normalize_key(key)
         if name in self._pressed_keys:
             self._pressed_keys.discard(name)
             print(json.dumps({"key": name, "pressed": False}), flush=True)
-
+ 
+    def _stop_listener(self):
+        if self._listener:
+            self._listener.stop()
+            self._listener = None
+ 
+    def _start_listener(self):
+        self._listener = KeyboardListener(
+            on_press=self._on_press,
+            on_release=self._on_release,
+            suppress=True
+        )
+        self._listener.start()
+ 
+    def _set_active(self, active: bool):
+        with self._state_lock:
+            self._active = active
+            if not active:
+                # Ensure no local typing is blocked while paused.
+                self._stop_listener()
+ 
+    def _read_commands(self):
+        while not self._stop_event.is_set():
+            line = sys.stdin.readline()
+            if not line:
+                time.sleep(0.05)
+                continue
+            try:
+                payload = json.loads(line.strip())
+            except Exception:
+                continue
+ 
+            command = payload.get("command")
+            if command == "pause":
+                self._set_active(False)
+            elif command == "resume":
+                self._set_active(True)
+ 
     def run(self):
         listener_running = False
-        
+       
         def focus_checker():
             nonlocal listener_running
             while not self._stop_event.is_set():
+                with self._state_lock:
+                    active = self._active
+ 
+                if not active:
+                    if listener_running:
+                        self._stop_listener()
+                        listener_running = False
+                    time.sleep(0.1)
+                    continue
+ 
                 is_focused = self._is_target_window_foreground()
                 if is_focused and not listener_running:
                     # Start listener
-                    self._listener = KeyboardListener(
-                        on_press=self._on_press,
-                        on_release=self._on_release,
-                        suppress=True
-                    )
-                    self._listener.start()
+                    self._start_listener()
                     listener_running = True
                 elif not is_focused and listener_running:
                     # Stop listener
-                    if self._listener:
-                        self._listener.stop()
-                        self._listener = None
+                    self._stop_listener()
                     listener_running = False
                 time.sleep(0.1)  # Check every 100ms
-        
+       
         focus_thread = threading.Thread(target=focus_checker, daemon=True)
         focus_thread.start()
-        
+        command_thread = threading.Thread(target=self._read_commands, daemon=True)
+        command_thread.start()
+       
         try:
             while not self._stop_event.is_set():
                 time.sleep(0.1)
         finally:
-            if self._listener:
-                self._listener.stop()
-
+            self._stop_listener()
+ 
 if __name__ == "__main__":
     helper = InputHelper()
     helper.run()
