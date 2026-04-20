@@ -38,6 +38,14 @@ export default function App() {
   const [chatLines, setChatLines] = useState<{ who: string; text: string; fileOffer?: { id: string; name: string; size: number } }[]>([]);
   const [fileProgress, setFileProgress] = useState<{ name: string; progress: number; total: number; direction: "send" | "recv" } | null>(null);
   const [cursorName, setCursorName] = useState("arrow");
+  const [remoteOS, setRemoteOS] = useState<string | null>(null);
+  const swapModifiers = useMemo(() => {
+    const localIsMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
+    const remoteIsMac = remoteOS === "Darwin";
+    // Swap if one is Mac and the other is not (Windows/Linux)
+    return localIsMac !== remoteIsMac;
+  }, [remoteOS]);
+  const [hostWarning, setHostWarning] = useState<string | null>(null);
   const [localInputActive, setLocalInputActive] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -65,6 +73,7 @@ export default function App() {
 
   const disconnect = useCallback(() => {
     releaseAllKeys();
+    setHostWarning(null);
     if (moveTimer.current != null) {
       window.clearTimeout(moveTimer.current);
       moveTimer.current = null;
@@ -111,6 +120,8 @@ export default function App() {
         }
       },
       onCursorChange: setCursorName,
+      onHostWarning: setHostWarning,
+      onHostInfo: setRemoteOS,
       onFileOffer: (id, name, size) => {
         setChatLines((prev) => [...prev, { who: "Host", text: `Sent a file offer.`, fileOffer: { id, name, size } }]);
       },
@@ -347,7 +358,7 @@ export default function App() {
 
   const onKey = (e: React.KeyboardEvent) => {
     if (!ctrlSendRef.current) return;
-    const mk = mapKeyboardEvent(e.nativeEvent);
+    const mk = mapKeyboardEvent(e.nativeEvent, { swapModifiers });
     if (!mk) return;
     e.preventDefault();
     if (mk.pressed) pressedKeys.current.add(mk.key);
@@ -389,6 +400,8 @@ export default function App() {
                 onStop={disconnect}
                 chatOpen={chatOpen}
                 onToggleChat={() => setChatOpen(!chatOpen)}
+                warning={hostWarning}
+                onBack={disconnect}
               />
             ) : (
               <ClientPanel
@@ -411,6 +424,7 @@ export default function App() {
                 releaseAllKeys={releaseAllKeys}
                 chatOpen={chatOpen}
                 onToggleChat={() => setChatOpen(!chatOpen)}
+                onBack={disconnect}
               />
             )}
           </div>

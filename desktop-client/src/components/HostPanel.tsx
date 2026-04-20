@@ -6,6 +6,8 @@ interface HostPanelProps {
   running: boolean;
   onStart: () => void;
   onStop: () => void;
+  warning?: string | null;
+  onBack: () => void;
   chatOpen: boolean;
   onToggleChat: () => void;
 }
@@ -15,12 +17,39 @@ export const HostPanel: React.FC<HostPanelProps> = ({
   status, 
   running, 
   onStart, 
-  onStop,
+  onStop, 
   chatOpen,
-  onToggleChat
+  onToggleChat,
+  warning, onBack
 }) => {
   return (
-    <div className="host-panel" style={{ padding: '20px', textAlign: 'center' }}>
+    <div className="host-panel" style={{ padding: '20px', textAlign: 'center', position: 'relative' }}>
+      <button 
+        className="secondary" 
+        onClick={onBack} 
+        style={{ 
+          position: 'absolute', 
+          top: '10px', 
+          left: '10px', 
+          padding: '4px 12px', 
+          fontSize: '12px' 
+        }}
+      >
+        Back
+      </button>
+      {warning && (
+        <div style={{ 
+          background: '#fff4ce', 
+          border: '1px solid #ffb900', 
+          padding: '10px', 
+          marginBottom: '15px', 
+          borderRadius: '4px',
+          color: '#333',
+          fontSize: '13px'
+        }}>
+          ⚠️ <strong>Note:</strong> {warning}
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '10px' }}>
         {running && (
            <button 

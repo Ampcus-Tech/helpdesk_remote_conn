@@ -18,6 +18,7 @@ export const MessageType = {
   FILE_START: "file_start",
   FILE_CHUNK: "file_chunk",
   FILE_END: "file_end",
+  HOST_INFO: "host_info",
 } as const;
 
 export type ControlMsg =
@@ -50,6 +51,10 @@ export type ControlMsg =
       type: typeof MessageType.KEYBOARD;
       key: string;
       pressed: boolean;
+    }
+  | {
+      type: typeof MessageType.HOST_INFO;
+      os: string;
     };
 
 export function ctrlPayload(m: ControlMsg): string {

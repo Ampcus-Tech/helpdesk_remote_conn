@@ -18,6 +18,7 @@ interface ClientPanelProps {
   onDoubleClick: (e: React.MouseEvent) => void;
   onKey: (e: React.KeyboardEvent) => void;
   releaseAllKeys: () => void;
+  onBack: () => void;
   chatOpen: boolean;
   onToggleChat: () => void;
 }
@@ -40,12 +41,35 @@ export const ClientPanel: React.FC<ClientPanelProps> = ({
   onDoubleClick,
   onKey,
   releaseAllKeys,
+  onBack,
   chatOpen,
   onToggleChat
 }) => {
+  React.useEffect(() => {
+    if (connected && typeof navigator !== "undefined" && "keyboard" in navigator) {
+      const kb = (navigator as any).keyboard;
+      if (kb && typeof kb.lock === "function") {
+        kb.lock().catch((err: any) => {
+          console.warn("Keyboard Lock failed:", err);
+        });
+      }
+    }
+    return () => {
+      if (typeof navigator !== "undefined" && "keyboard" in navigator) {
+        const kb = (navigator as any).keyboard;
+        if (kb && typeof kb.unlock === "function") {
+          kb.unlock();
+        }
+      }
+    };
+  }, [connected]);
+
   return (
     <div className="client-panel">
       <div className="toolbar">
+        <button type="button" className="secondary" onClick={onBack} style={{ marginRight: '8px' }}>
+          Back
+        </button>
         <input
           type="text"
           placeholder="Enter Host ID"
@@ -59,6 +83,8 @@ export const ClientPanel: React.FC<ClientPanelProps> = ({
         <button type="button" className="secondary" disabled={!connected && !connecting} onClick={onDisconnect}>
           Disconnect
         </button>
+
+
         <button 
           type="button" 
           className={`secondary ${chatOpen ? 'active' : ''}`} 
@@ -67,7 +93,7 @@ export const ClientPanel: React.FC<ClientPanelProps> = ({
         >
           {chatOpen ? "Hide Chat" : "Show Chat"}
         </button>
-        <div className="status">{status}</div>
+        <div className="status" style={{ marginLeft: "auto" }}>{status}</div>
       </div>
 
       <div className="stage">

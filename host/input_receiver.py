@@ -82,7 +82,16 @@ class InputReceiver:
     def handle_keyboard(self, msg: ControlMessage):
         key = msg.key
         try:
-            # simple mapping
+            # Fallback mapping for modifiers on Linux to improve compatibility with desktop environments
+            if platform.system() == "Linux":
+                linux_fallbacks = {
+                    "ctrl_l": "ctrl", "ctrl_r": "ctrl",
+                    "alt_l": "alt", "alt_r": "alt",
+                    "shift_l": "shift", "shift_r": "shift"
+                }
+                if key in linux_fallbacks:
+                    key = linux_fallbacks[key]
+
             if hasattr(Key, key):
                 k = getattr(Key, key)
             elif len(key) == 1:

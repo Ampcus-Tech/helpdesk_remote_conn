@@ -37,6 +37,11 @@ class ScreenCaptureTrack(VideoStreamTrack):
                     "and enable for your terminal application."
                 )
         else:
+            # Linux specific: Detect Wayland
+            if platform.system() == "Linux":
+                if os.environ.get("XDG_SESSION_TYPE") == "wayland":
+                    print("UI_SIGNAL:WARN:WAYLAND_DETECTED - Performance may be degraded. Switching to Xorg/X11 is recommended.", flush=True)
+
             self.sct = mss.mss()
             self.monitor = self.sct.monitors[1]  # primary monitor
             
@@ -49,6 +54,12 @@ class ScreenCaptureTrack(VideoStreamTrack):
         
         now = time.perf_counter()
         wait = self._next_capture_at - now
+        
+        # If we are significantly behind (e.g., more than 2 frames), reset the clock
+        if wait < -(self._interval * 2):
+            self._next_capture_at = now
+            wait = 0
+            
         if wait > 0:
             import asyncio
             await asyncio.sleep(wait)
@@ -56,9 +67,9 @@ class ScreenCaptureTrack(VideoStreamTrack):
         sct_img = self.sct.grab(self.monitor)
         self.last_capture_time = time.time()
         self._next_capture_at += self._interval
-        late_by = time.perf_counter() - self._next_capture_at
-        if late_by > self._interval:
-            # If capture/encode falls behind, resync schedule to prevent drift buildup.
+        
+        # Guard against drift buildup
+        if (time.perf_counter() - self._next_capture_at) > self._interval:
             self._next_capture_at = time.perf_counter() + self._interval
         
         # Convert mss image to numpy array (BGRA)

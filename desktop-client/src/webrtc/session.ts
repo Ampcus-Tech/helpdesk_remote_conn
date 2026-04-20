@@ -12,6 +12,7 @@ export type SessionHandlers = {
   onControlOpen: (send: (json: string) => void) => void;
   onControlMessage: (text: string) => void;
   onCursorName: (name: string) => void;
+  onHostInfo: (os: string) => void;
   onChatText: (sender: "Host" | "You" | "SYSTEM", text: string) => void;
   onFileOffer: (fileId: string, fileName: string, fileSize: number) => void;
   onFileProgress: (fileName: string, transferred: number, total: number, direction: "send" | "recv") => void;
@@ -244,6 +245,10 @@ export async function startSession(hostId: string, handlers: SessionHandlers): P
       const o = JSON.parse(text) as { type?: string; cursor_name?: string };
       if (o.type === MessageType.CURSOR_UPDATE && o.cursor_name) {
         handlers.onCursorName(o.cursor_name);
+        return;
+      }
+      if (o.type === MessageType.HOST_INFO && (o as any).os) {
+        handlers.onHostInfo((o as any).os);
         return;
       }
     } catch {

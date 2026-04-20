@@ -28,6 +28,14 @@ body,
   height: 100%;
 }
 
+.client-panel, .host-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+}
+
 .toolbar {
   display: flex;
   align-items: center;

@@ -20,6 +20,8 @@ export type SessionEvents = {
   onChatReceived: (who: string, text: string) => void;
   onVideoStream: (stream: MediaStream) => void;
   onCursorChange: (name: string) => void;
+  onHostWarning: (msg: string) => void;
+  onHostInfo: (os: string) => void;
   onFileOffer: (fileId: string, fileName: string, fileSize: number) => void;
   onFileProgress: (fileName: string, transferred: number, total: number, direction: "send" | "recv") => void;
   onFileDone: (fileName: string, path: string, direction: "send" | "recv") => void;
@@ -47,6 +49,12 @@ class SessionManager {
       if (line.includes("UI_SIGNAL:HOST_ID:")) {
         const id = line.split("UI_SIGNAL:HOST_ID:")[1].trim();
         this.events.onHostIdGenerated?.(id);
+      } else if (line.includes("UI_SIGNAL:WARN:")) {
+        const warn = line.split("UI_SIGNAL:WARN:")[1].trim();
+        this.events.onHostWarning?.(warn);
+      } else if (line.includes("UI_SIGNAL:ERROR:")) {
+        const err = line.split("UI_SIGNAL:ERROR:")[1].trim();
+        this.events.onStatusChange?.(`Host Error: ${err}`);
       } else if (line.includes("UI_SIGNAL:STATUS:")) {
         const status = line.split("UI_SIGNAL:STATUS:")[1].trim();
         this.events.onStatusChange?.(status);
@@ -120,6 +128,10 @@ class SessionManager {
         onControlMessage: () => { },
         onCursorName: (name) => this.events.onCursorChange?.(name),
         onChatText: (who, text) => this.events.onChatReceived?.(who, text),
+        onHostInfo: (os) => {
+          console.log("Remote Host OS:", os);
+          this.events.onHostInfo?.(os);
+        },
         onFileOffer: (fileId, fileName, fileSize) => this.events.onFileOffer?.(fileId, fileName, fileSize),
         onFileProgress: (fileName, transferred, total, direction) => this.events.onFileProgress?.(fileName, transferred, total, direction),
         onFileDone: (fileName, path, direction) => this.events.onFileDone?.(fileName, path, direction),

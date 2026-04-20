@@ -2,11 +2,15 @@
  * Map browser keyboard events to the key names expected by `host/input_receiver.py`
  * (via pynput's `Key` attributes or single-character keys).
  */
-export function mapKeyboardEvent(ev: KeyboardEvent): { key: string; pressed: boolean } | null {
+export function mapKeyboardEvent(
+  ev: KeyboardEvent,
+  options: { swapModifiers?: boolean } = {}
+): { key: string; pressed: boolean } | null {
   if (ev.repeat) return null;
 
   const code = ev.code;
   const key = ev.key;
+  const swap = options.swapModifiers;
 
   const codeMap: Record<string, string> = {
     Enter: "enter",
@@ -30,14 +34,15 @@ export function mapKeyboardEvent(ev: KeyboardEvent): { key: string; pressed: boo
     Pause: "pause",
     PrintScreen: "print_screen",
     ContextMenu: "menu",
-    ControlLeft: "ctrl_l",
-    ControlRight: "ctrl_r",
+    // Base modifiers
+    ControlLeft: swap ? "cmd_l" : "ctrl_l",
+    ControlRight: swap ? "cmd_r" : "ctrl_r",
     AltLeft: "alt_l",
     AltRight: "alt_r",
     ShiftLeft: "shift_l",
     ShiftRight: "shift_r",
-    MetaLeft: "cmd_l",
-    MetaRight: "cmd_r",
+    MetaLeft: swap ? "ctrl_l" : "cmd_l",
+    MetaRight: swap ? "ctrl_r" : "cmd_r",
   };
 
   if (codeMap[code]) {
@@ -54,7 +59,9 @@ export function mapKeyboardEvent(ev: KeyboardEvent): { key: string; pressed: boo
 
   if (key.length === 1) {
     let ch = key;
-    if (ev.ctrlKey && key.length === 1 && /[A-Z]/i.test(key)) {
+    // Adjust logic if ctrlKey is involved but we swapped them
+    const isCtrl = swap ? ev.metaKey : ev.ctrlKey;
+    if (isCtrl && key.length === 1 && /[A-Z]/i.test(key)) {
       ch = key.toLowerCase();
     } else {
       ch = key.toLowerCase();
