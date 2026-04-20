@@ -6,11 +6,31 @@ interface HostPanelProps {
   running: boolean;
   onStart: () => void;
   onStop: () => void;
+  chatOpen: boolean;
+  onToggleChat: () => void;
 }
 
-export const HostPanel: React.FC<HostPanelProps> = ({ hostId, status, running, onStart, onStop }) => {
+export const HostPanel: React.FC<HostPanelProps> = ({ 
+  hostId, 
+  status, 
+  running, 
+  onStart, 
+  onStop,
+  chatOpen,
+  onToggleChat
+}) => {
   return (
     <div className="host-panel" style={{ padding: '20px', textAlign: 'center' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '10px' }}>
+        {running && (
+           <button 
+             className={`secondary small ${chatOpen ? 'active' : ''}`} 
+             onClick={onToggleChat}
+           >
+             {chatOpen ? "Hide Chat" : "Show Chat"}
+           </button>
+        )}
+      </div>
       <h2>Host Desktop</h2>
       <p style={{ color: '#666', marginBottom: '20px' }}>
         Share your screen with a remote professional.

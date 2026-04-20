@@ -3,14 +3,14 @@ import { MessageType } from "./protocol";
 import { pointerToVideoFrame } from "./webrtc/coords";
 import { mapKeyboardEvent } from "./webrtc/keyboard";
 import { sessionManager, SessionMode } from "./services/sessionManager";
- 
+
 import HostPanel from "./components/HostPanel";
 import ClientPanel from "./components/ClientPanel";
 import ChatPanel from "./components/ChatPanel";
- 
+
 const MOUSE_MOVE_INTERVAL_MS = 1000 / 60;
 const DC_BUFFER_CAP = 24 * 1024;
- 
+
 const CURSOR_CSS: Record<string, string> = {
   arrow: "default",
   ibeam: "text",
@@ -27,7 +27,7 @@ const CURSOR_CSS: Record<string, string> = {
   appstarting: "progress",
   help: "help",
 };
- 
+
 export default function App() {
   const [mode, setMode] = useState<SessionMode>("idle");
   const [hostId, setHostId] = useState("");
@@ -35,21 +35,24 @@ export default function App() {
   const [connecting, setConnecting] = useState(false);
   const [connected, setConnected] = useState(false);
   const [chatOpen, setChatOpen] = useState(true);
-  const [chatLines, setChatLines] = useState<{ who: string; text: string }[]>([]);
+  const [chatLines, setChatLines] = useState<{ who: string; text: string; fileOffer?: { id: string; name: string; size: number } }[]>([]);
+  const [fileProgress, setFileProgress] = useState<{ name: string; progress: number; total: number; direction: "send" | "recv" } | null>(null);
   const [cursorName, setCursorName] = useState("arrow");
- 
+  const [localInputActive, setLocalInputActive] = useState(false);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const ctrlSendRef = useRef<((json: string) => void) | null>(null);
   const lastMoveAt = useRef(0);
+  const lastProgressUpdate = useRef(0);
   const buttonsDown = useRef<Set<"left" | "right">>(new Set());
   const pressedKeys = useRef<Set<string>>(new Set());
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
   const moveTimer = useRef<number | null>(null);
   const moveArmed = useRef(false);
- 
+
   const cursorStyle = useMemo(() => CURSOR_CSS[cursorName] || "default", [cursorName]);
- 
+
   const releaseAllKeys = useCallback(() => {
     const fn = ctrlSendRef.current;
     if (!fn) return;
@@ -59,7 +62,7 @@ export default function App() {
     }
     pressedKeys.current.clear();
   }, []);
- 
+
   const disconnect = useCallback(() => {
     releaseAllKeys();
     if (moveTimer.current != null) {
@@ -68,22 +71,23 @@ export default function App() {
     }
     moveArmed.current = false;
     lastPointer.current = null;
- 
+
     if (mode === "client") {
-        sessionManager.stopClient();
+      sessionManager.stopClient();
     } else if (mode === "host") {
-        sessionManager.stopHost();
+      sessionManager.stopHost();
     }
- 
+
     const v = videoRef.current;
     if (v) v.srcObject = null;
-   
+
     setConnected(false);
     setConnecting(false);
     setStatus("Disconnected");
     setMode("idle");
+    setFileProgress(null);
   }, [mode, releaseAllKeys]);
- 
+
   useEffect(() => {
     sessionManager.setEvents({
       onStatusChange: setStatus,
@@ -103,19 +107,33 @@ export default function App() {
         const v = videoRef.current;
         if (v) {
           v.srcObject = stream;
-          void v.play().catch(() => {});
+          void v.play().catch(() => { });
         }
       },
       onCursorChange: setCursorName,
+      onFileOffer: (id, name, size) => {
+        setChatLines((prev) => [...prev, { who: "Host", text: `Sent a file offer.`, fileOffer: { id, name, size } }]);
+      },
+      onFileProgress: (name, progress, total, direction) => {
+        const now = Date.now();
+        if (now - lastProgressUpdate.current > 100 || progress === total) {
+          lastProgressUpdate.current = now;
+          setFileProgress({ name, progress, total, direction });
+        }
+      },
+      onFileDone: (name, _path, direction) => {
+        setFileProgress(null);
+        setChatLines((prev) => [...prev, { who: "SYSTEM", text: `${direction === "send" ? "Sent" : "Received"} ${name} successfully.` }]);
+      }
     });
   }, [disconnect]);
- 
+
   const startHost = async () => {
     setMode("host");
     setChatLines([]);
     await sessionManager.startHost();
   };
- 
+
   const startClient = async () => {
     const id = hostId.trim();
     if (!id) {
@@ -128,21 +146,60 @@ export default function App() {
     await sessionManager.startClient(id);
     const sess = sessionManager.getActiveSession();
     if (sess) {
-        ctrlSendRef.current = (json) => {
-            if (sess.channels.ctrl.readyState === "open") {
-                sess.channels.ctrl.send(json);
-            }
-        };
+      ctrlSendRef.current = (json) => {
+        if (sess.channels.ctrl.readyState === "open") {
+          sess.channels.ctrl.send(json);
+        }
+      };
     }
   };
- 
+
   const sendChatNow = (text: string) => {
-    if (mode === "client") {
-        sessionManager.sendChat(text);
-        setChatLines((prev) => [...prev, { who: "You", text }]);
+    if (connected) {
+      sessionManager.sendChat(text);
+      setChatLines((prev) => [...prev, { who: "You", text }]);
     }
   };
- 
+
+  const sendFileNow = async (file: File) => {
+    if (mode === "client" && connected) {
+      setChatLines((prev) => [...prev, { who: "You", text: `Offering file: ${file.name}` }]);
+      await sessionManager.sendFile(file, (p) => {
+        setFileProgress({ name: file.name, progress: p, total: file.size, direction: "send" });
+      });
+    } else if (mode === "host" && connected) {
+      // In host mode, we use Tauri to pick a file path
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const path = await open({
+        multiple: false,
+        directory: false,
+      });
+      if (path && typeof path === "string") {
+        setChatLines((prev) => [...prev, { who: "You", text: `Offering file: ${path.split(/[/\\]/).pop()}` }]);
+        await sessionManager.sendFile(path, () => { });
+      }
+    }
+  };
+
+  const respondFileNow = async (id: string, accept: boolean) => {
+    if (mode === "client" && connected) {
+      sessionManager.respondToFileOffer(id, accept);
+      setChatLines((prev) => prev.map(l => l.fileOffer?.id === id ? { ...l, fileOffer: undefined, text: l.text + (accept ? " (Accepted)" : " (Rejected)") } : l));
+    } else if (mode === "host" && connected) {
+      let savePath: string | null = null;
+      if (accept) {
+        const { save } = await import("@tauri-apps/plugin-dialog");
+        const offer = chatLines.find(l => l.fileOffer?.id === id)?.fileOffer;
+        savePath = await save({
+          defaultPath: offer?.name
+        });
+        if (!savePath) return; // Cancelled
+      }
+      sessionManager.respondToFileOffer(id, accept, savePath || undefined);
+      setChatLines((prev) => prev.map(l => l.fileOffer?.id === id ? { ...l, fileOffer: undefined, text: l.text + (accept ? " (Accepted)" : " (Rejected)") } : l));
+    }
+  };
+
   useEffect(() => {
     const onBlur = () => releaseAllKeys();
     const onVis = () => {
@@ -155,7 +212,7 @@ export default function App() {
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [releaseAllKeys]);
- 
+
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -185,36 +242,36 @@ export default function App() {
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
   }, [connected]);
- 
+
   const onPointerMove = (e: React.PointerEvent) => {
     lastPointer.current = { x: e.clientX, y: e.clientY };
     if (moveArmed.current) return;
     moveArmed.current = true;
- 
+
     const tick = () => {
       moveArmed.current = false;
       moveTimer.current = null;
- 
+
       const video = videoRef.current;
       const sess = sessionManager.getActiveSession();
       const fn = ctrlSendRef.current;
       const pt = lastPointer.current;
       if (!video || !sess || !fn || !pt) return;
- 
+
       const now = performance.now();
       if (now - lastMoveAt.current < MOUSE_MOVE_INTERVAL_MS) {
         moveTimer.current = window.setTimeout(tick, Math.max(0, MOUSE_MOVE_INTERVAL_MS - (now - lastMoveAt.current)));
         moveArmed.current = true;
         return;
       }
- 
+
       const ch = sess.channels.ctrl;
       if (ch.bufferedAmount > DC_BUFFER_CAP) {
         moveTimer.current = window.setTimeout(tick, 16);
         moveArmed.current = true;
         return;
       }
- 
+
       const mapped = pointerToVideoFrame(pt.x, pt.y, video);
       if (!mapped) return;
       lastMoveAt.current = now;
@@ -228,20 +285,20 @@ export default function App() {
         }),
       );
     };
- 
+
     moveTimer.current = window.setTimeout(tick, 0);
   };
- 
+
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     const el = e.currentTarget;
     el.focus();
     try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
- 
+
     const video = videoRef.current;
     if (!video || !ctrlSendRef.current) return;
     const mapped = pointerToVideoFrame(e.clientX, e.clientY, video);
     if (!mapped) return;
- 
+
     if (e.button === 0) {
       buttonsDown.current.add("left");
       ctrlSendRef.current(JSON.stringify({ type: MessageType.MOUSE_CLICK, button: "left", pressed: true }));
@@ -251,7 +308,7 @@ export default function App() {
       ctrlSendRef.current(JSON.stringify({ type: MessageType.MOUSE_CLICK, button: "right", pressed: true }));
     }
   };
- 
+
   const onPointerUp = (e: React.PointerEvent) => {
     if (!ctrlSendRef.current) return;
     if (e.button === 0 && buttonsDown.current.has("left")) {
@@ -263,7 +320,7 @@ export default function App() {
       ctrlSendRef.current(JSON.stringify({ type: MessageType.MOUSE_CLICK, button: "right", pressed: false }));
     }
   };
- 
+
   const onPointerCancel = () => {
     if (!ctrlSendRef.current) return;
     if (buttonsDown.current.has("left")) {
@@ -275,7 +332,7 @@ export default function App() {
       ctrlSendRef.current(JSON.stringify({ type: MessageType.MOUSE_CLICK, button: "right", pressed: false }));
     }
   };
- 
+
   const onDoubleClick = (e: React.MouseEvent) => {
     const video = videoRef.current;
     if (!video || !ctrlSendRef.current) return;
@@ -287,7 +344,7 @@ export default function App() {
       ctrlSendRef.current(JSON.stringify({ type: MessageType.MOUSE_DOUBLE_CLICK, button: "right" }));
     }
   };
- 
+
   const onKey = (e: React.KeyboardEvent) => {
     if (!ctrlSendRef.current) return;
     const mk = mapKeyboardEvent(e.nativeEvent);
@@ -297,7 +354,7 @@ export default function App() {
     else pressedKeys.current.delete(mk.key);
     ctrlSendRef.current(JSON.stringify({ type: MessageType.KEYBOARD, key: mk.key, pressed: mk.pressed }));
   };
- 
+
   return (
     <div className="layout">
       {mode === "idle" ? (
@@ -315,52 +372,59 @@ export default function App() {
         </div>
       ) : (
         <div style={{ display: 'flex', width: '100%', height: '100%' }}>
-            <div style={{ flex: 1, position: 'relative' }}>
-                <button
-                  style={{ position: 'absolute', top: 10, left: 10, zIndex: 100, padding: '4px 8px', fontSize: '12px' }}
-                  onClick={disconnect}
-                >
-                  Back to Menu
-                </button>
- 
-                {mode === "host" ? (
-                    <HostPanel
-                        hostId={hostId}
-                        status={status}
-                        running={mode === "host"}
-                        onStart={startHost}
-                        onStop={disconnect}
-                    />
-                ) : (
-                    <ClientPanel
-                        hostId={hostId}
-                        setHostId={setHostId}
-                        status={status}
-                        connecting={connecting}
-                        connected={connected}
-                        onConnect={startClient}
-                        onDisconnect={disconnect}
-                        videoRef={videoRef}
-                        wrapRef={wrapRef}
-                        cursorStyle={cursorStyle}
-                        onPointerMove={onPointerMove}
-                        onPointerDown={onPointerDown}
-                        onPointerUp={onPointerUp}
-                        onPointerCancel={onPointerCancel}
-                        onDoubleClick={onDoubleClick}
-                        onKey={onKey}
-                        releaseAllKeys={releaseAllKeys}
-                    />
-                )}
-            </div>
- 
-            {chatOpen && (
-                <ChatPanel
-                    lines={chatLines}
-                    onSend={sendChatNow}
-                    disabled={!connected && mode === "client"}
-                />
+          <div style={{ flex: 1, position: 'relative' }}>
+            <button
+              style={{ position: 'absolute', top: 10, left: 10, zIndex: 100, padding: '4px 8px', fontSize: '12px' }}
+              onClick={disconnect}
+            >
+              Back to Menu
+            </button>
+
+            {mode === "host" ? (
+              <HostPanel
+                hostId={hostId}
+                status={status}
+                running={mode === "host"}
+                onStart={startHost}
+                onStop={disconnect}
+                chatOpen={chatOpen}
+                onToggleChat={() => setChatOpen(!chatOpen)}
+              />
+            ) : (
+              <ClientPanel
+                hostId={hostId}
+                setHostId={setHostId}
+                status={status}
+                connecting={connecting}
+                connected={connected}
+                onConnect={startClient}
+                onDisconnect={disconnect}
+                videoRef={videoRef}
+                wrapRef={wrapRef}
+                cursorStyle={cursorStyle}
+                onPointerMove={onPointerMove}
+                onPointerDown={onPointerDown}
+                onPointerUp={onPointerUp}
+                onPointerCancel={onPointerCancel}
+                onDoubleClick={onDoubleClick}
+                onKey={onKey}
+                releaseAllKeys={releaseAllKeys}
+                chatOpen={chatOpen}
+                onToggleChat={() => setChatOpen(!chatOpen)}
+              />
             )}
+          </div>
+
+          {chatOpen && (
+            <ChatPanel
+              lines={chatLines}
+              onSendChat={sendChatNow}
+              onSendFile={sendFileNow}
+              onRespondFile={respondFileNow}
+              fileProgress={fileProgress || undefined}
+              disabled={!connected && mode === "client"}
+            />
+          )}
         </div>
       )}
     </div>

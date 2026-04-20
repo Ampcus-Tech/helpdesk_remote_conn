@@ -139,12 +139,107 @@ body,
 }
 
 .chat-row {
-  margin-bottom: 8px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-row.own {
+  align-items: flex-end;
+}
+
+.chat-row.own .chat-body {
+  background: var(--accent);
+  color: #000;
+  border-bottom-right-radius: 2px;
+}
+
+.chat-row.own .chat-meta {
+  text-align: right;
+}
+
+.chat-row.system {
+  align-items: center;
+  text-align: center;
+  opacity: 0.8;
+}
+
+.chat-row.system .chat-body {
+  background: transparent;
+  border: 1px dashed var(--border);
+  font-style: italic;
+  font-size: 12px;
+}
+
+.chat-body {
+  padding: 8px 12px;
+  background: var(--bg);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  max-width: 90%;
+  word-break: break-word;
 }
 
 .chat-meta {
   color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 2px;
+  padding: 0 4px;
+}
+
+.file-offer {
+  margin-top: 8px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.file-offer p {
+  margin: 0 0 8px 0;
   font-size: 12px;
+}
+
+.offer-actions {
+  display: flex;
+  gap: 8px;
+}
+
+button.small {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+button.small.accept {
+  background: #28a745;
+  color: white;
+}
+
+.file-progress-overlay {
+  padding: 10px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+
+.progress-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  margin-bottom: 4px;
+  color: var(--muted);
+}
+
+.progress-bar-bg {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-bar-fg {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.1s ease;
 }
 
 .chat-input-row {
@@ -152,15 +247,38 @@ body,
   gap: 8px;
   padding: 10px;
   border-top: 1px solid var(--border);
+  align-items: center;
+}
+
+.icon-button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.icon-button:hover:not(:disabled) {
+  background: var(--border);
 }
 
 .chat-input-row input {
   flex: 1;
-  padding: 8px;
+  padding: 8px 12px;
   border-radius: 6px;
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
+  font-size: 13px;
+}
+
+.chat-panel {
+  box-shadow: -4px 0 15px rgba(0, 0, 0, 0.3);
 }
 
 .hint {

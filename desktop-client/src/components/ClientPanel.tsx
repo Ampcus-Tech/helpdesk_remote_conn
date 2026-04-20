@@ -18,6 +18,8 @@ interface ClientPanelProps {
   onDoubleClick: (e: React.MouseEvent) => void;
   onKey: (e: React.KeyboardEvent) => void;
   releaseAllKeys: () => void;
+  chatOpen: boolean;
+  onToggleChat: () => void;
 }
 
 export const ClientPanel: React.FC<ClientPanelProps> = ({
@@ -37,7 +39,9 @@ export const ClientPanel: React.FC<ClientPanelProps> = ({
   onPointerCancel,
   onDoubleClick,
   onKey,
-  releaseAllKeys
+  releaseAllKeys,
+  chatOpen,
+  onToggleChat
 }) => {
   return (
     <div className="client-panel">
@@ -54,6 +58,14 @@ export const ClientPanel: React.FC<ClientPanelProps> = ({
         </button>
         <button type="button" className="secondary" disabled={!connected && !connecting} onClick={onDisconnect}>
           Disconnect
+        </button>
+        <button 
+          type="button" 
+          className={`secondary ${chatOpen ? 'active' : ''}`} 
+          onClick={onToggleChat}
+          title="Toggle Chat & Files"
+        >
+          {chatOpen ? "Hide Chat" : "Show Chat"}
         </button>
         <div className="status">{status}</div>
       </div>

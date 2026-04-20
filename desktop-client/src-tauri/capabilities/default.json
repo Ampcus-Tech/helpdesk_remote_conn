@@ -3,5 +3,9 @@
   "identifier": "default",
   "description": "Default capabilities for the viewer window",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "dialog:allow-save",
+    "dialog:allow-open"
+  ]
 }

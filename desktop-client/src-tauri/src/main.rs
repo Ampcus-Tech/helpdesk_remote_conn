@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
  
+use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
@@ -46,6 +47,7 @@ fn start_host(app: AppHandle, state: State<'_, AppState>) -> Result<String, Stri
  
     let mut child = Command::new(&python_cmd)
         .arg(script_path)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -92,6 +94,19 @@ fn stop_host(state: State<'_, AppState>) -> Result<String, String> {
         Err("Host not running".into())
     }
 }
+
+#[tauri::command]
+fn send_host_command(state: State<'_, AppState>, cmd: String) -> Result<(), String> {
+    let mut lock = state.host_process.lock().map_err(|_| "Failed to lock state")?;
+    if let Some(child) = lock.as_mut() {
+        if let Some(mut stdin) = child.stdin.as_mut() {
+            writeln!(stdin, "{}", cmd).map_err(|e| format!("Failed to write to host stdin: {}", e))?;
+            stdin.flush().map_err(|e| format!("Failed to flush host stdin: {}", e))?;
+            return Ok(());
+        }
+    }
+    Err("Host not running or stdin not available".into())
+}
  
 #[tauri::command]
 fn start_input_helper(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
@@ -122,6 +137,7 @@ fn start_input_helper(app: AppHandle, state: State<'_, AppState>) -> Result<Stri
  
     let mut child = Command::new(&python_cmd)
         .arg(script_path)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -168,6 +184,24 @@ fn stop_input_helper(state: State<'_, AppState>) -> Result<String, String> {
         Err("Input helper not running".into())
     }
 }
+
+#[tauri::command]
+fn set_input_helper_active(state: State<'_, AppState>, active: bool) -> Result<(), String> {
+    let mut lock = state.input_helper_process.lock().map_err(|_| "Failed to lock state")?;
+    if let Some(child) = lock.as_mut() {
+        if let Some(mut stdin) = child.stdin.as_mut() {
+            let cmd = if active {
+                r#"{"command":"resume"}"#
+            } else {
+                r#"{"command":"pause"}"#
+            };
+            writeln!(stdin, "{}", cmd).map_err(|e| format!("Failed to write to input_helper stdin: {}", e))?;
+            stdin.flush().map_err(|e| format!("Failed to flush input_helper stdin: {}", e))?;
+            return Ok(());
+        }
+    }
+    Err("Input helper not running or lacks stdin".into())
+}
  
 fn main() {
     tauri::Builder::default()
@@ -175,11 +209,14 @@ fn main() {
             host_process: Arc::new(Mutex::new(None)),
             input_helper_process: Arc::new(Mutex::new(None)),
         })
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             start_host,
             stop_host,
+            send_host_command,
             start_input_helper,
-            stop_input_helper
+            stop_input_helper,
+            set_input_helper_active
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
