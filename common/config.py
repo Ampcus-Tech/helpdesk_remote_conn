@@ -18,9 +18,10 @@ NO_RELAY = os.getenv("NO_RELAY", "").lower() in ("1", "true", "yes")
 def _metered_turn_urls_udp_first() -> list[str]:
     """UDP TURN first (lower latency when UDP is allowed)."""
     return [
-        "turn:global.relay.metered.ca:80",
-        "turn:global.relay.metered.ca:443?transport=tcp",
-        "turns:global.relay.metered.ca:443?transport=tcp",
+        "turn:in.relay.metered.ca:80",
+        "turn:in.relay.metered.ca:80?transport=tcp",
+        "turn:in.relay.metered.ca:443",
+        "turns:in.relay.metered.ca:443?transport=tcp",
     ]
 
 
@@ -30,9 +31,10 @@ def _metered_turn_urls_tcp_first() -> list[str]:
     aiortc only applies the *first* TURN URL it sees (see rtcicetransport.connection_kwargs).
     """
     return [
-        "turns:global.relay.metered.ca:443?transport=tcp",
-        "turn:global.relay.metered.ca:443?transport=tcp",
-        "turn:global.relay.metered.ca:80",
+        "turns:in.relay.metered.ca:443?transport=tcp",
+        "turn:in.relay.metered.ca:443",
+        "turn:in.relay.metered.ca:80?transport=tcp",
+        "turn:in.relay.metered.ca:80",
     ]
 
 
@@ -48,10 +50,10 @@ def _default_ice_servers() -> list[dict]:
             }
         ]
 
-    # ExpressTurn TURN server
-    turn_user = os.getenv("TURN_USERNAME", "000000002091522595")
-    turn_cred = os.getenv("TURN_CREDENTIAL", "aQuvdZvnTQppNdueNhrJq/q6u3o=")
-    turn_urls = ["turn:free.expressturn.com:3478"]
+    # Metered TURN server
+    turn_user = os.getenv("TURN_USERNAME", "f373f8da17f6818e4bc590e4")
+    turn_cred = os.getenv("TURN_CREDENTIAL", "srwU+4T4iV3f9ef6")
+    turn_urls = _metered_turn_urls_tcp_first()
     
     return [
         {
