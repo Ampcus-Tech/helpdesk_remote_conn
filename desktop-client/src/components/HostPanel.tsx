@@ -96,7 +96,8 @@ export const HostPanel: React.FC<HostPanelProps> = ({
         background: running ? '#e6f4ea' : '#f8f9fa',
         borderRadius: '6px',
         fontSize: '14px',
-        display: 'inline-block'
+        display: 'inline-block',
+        color: running ? '#0078d4' : '#666'
       }}>
         Status: <strong>{status}</strong>
       </div>

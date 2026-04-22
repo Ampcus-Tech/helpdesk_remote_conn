@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
-import { ActiveSession, startSession, sendChatLine, sendFile, respondFileOffer } from "../webrtc/session";
+import { ActiveSession, startSession, sendChatLine, sendFile, respondFileOffer, setIncomingFileSavePath } from "../webrtc/session";
  
 export type SessionMode = "idle" | "host" | "client";
  
@@ -250,6 +250,9 @@ class SessionManager {
  
   respondToFileOffer(fileId: string, accepted: boolean, savePath?: string) {
     if (this.jsSession?.channels.file) {
+      if (accepted && savePath) {
+        setIncomingFileSavePath(fileId, savePath);
+      }
       respondFileOffer(this.jsSession.channels.file, fileId, accepted);
     } else {
       // Host mode: send to python stdin

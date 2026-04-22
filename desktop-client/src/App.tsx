@@ -28,6 +28,21 @@ const CURSOR_CSS: Record<string, string> = {
   help: "help",
 };
 
+function normalizeDialogPath(path: string): string {
+  if (!path.startsWith("file://")) return path;
+  try {
+    const url = new URL(path);
+    // URL pathname is percent-encoded and may include leading slash on Windows drive paths.
+    let normalized = decodeURIComponent(url.pathname);
+    if (/^\/[A-Za-z]:\//.test(normalized)) {
+      normalized = normalized.slice(1);
+    }
+    return normalized;
+  } catch {
+    return path;
+  }
+}
+
 export default function App() {
   const [mode, setMode] = useState<SessionMode>("idle");
   const [hostId, setHostId] = useState("");
@@ -194,7 +209,17 @@ export default function App() {
 
   const respondFileNow = async (id: string, accept: boolean) => {
     if (mode === "client" && connected) {
-      sessionManager.respondToFileOffer(id, accept);
+      let savePath: string | null = null;
+      if (accept) {
+        const { save } = await import("@tauri-apps/plugin-dialog");
+        const offer = chatLines.find(l => l.fileOffer?.id === id)?.fileOffer;
+        savePath = await save({
+          defaultPath: offer?.name
+        });
+        if (!savePath) return; // Cancelled
+        savePath = normalizeDialogPath(savePath);
+      }
+      sessionManager.respondToFileOffer(id, accept, savePath || undefined);
       setChatLines((prev) => prev.map(l => l.fileOffer?.id === id ? { ...l, fileOffer: undefined, text: l.text + (accept ? " (Accepted)" : " (Rejected)") } : l));
     } else if (mode === "host" && connected) {
       let savePath: string | null = null;
@@ -205,6 +230,7 @@ export default function App() {
           defaultPath: offer?.name
         });
         if (!savePath) return; // Cancelled
+        savePath = normalizeDialogPath(savePath);
       }
       sessionManager.respondToFileOffer(id, accept, savePath || undefined);
       setChatLines((prev) => prev.map(l => l.fileOffer?.id === id ? { ...l, fileOffer: undefined, text: l.text + (accept ? " (Accepted)" : " (Rejected)") } : l));

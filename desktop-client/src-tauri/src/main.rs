@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
  
+use std::fs;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -212,6 +213,26 @@ fn set_input_helper_active(
  
     Err("Input helper not running or lacks stdin".into())
 }
+
+#[tauri::command]
+fn save_received_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    let normalized = if let Some(rest) = path.strip_prefix("file://") {
+        // Linux portals may return URI paths; normalize to filesystem path.
+        #[cfg(target_os = "windows")]
+        {
+            rest.strip_prefix('/').unwrap_or(rest).to_string()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            format!("/{}", rest.trim_start_matches('/'))
+        }
+    } else {
+        path.clone()
+    };
+
+    fs::write(&normalized, bytes)
+        .map_err(|e| format!("Failed to save file to {}: {}", normalized, e))
+}
  
 fn main() {
     tauri::Builder::default()
@@ -226,7 +247,8 @@ fn main() {
             send_host_command,
             start_input_helper,
             stop_input_helper,
-            set_input_helper_active
+            set_input_helper_active,
+            save_received_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

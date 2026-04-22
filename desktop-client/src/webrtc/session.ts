@@ -1,4 +1,5 @@
 import { MessageType } from "../protocol";
+import { invoke } from "@tauri-apps/api/core";
  
 export type DataChannels = {
   ctrl: RTCDataChannel;
@@ -44,6 +45,11 @@ let incomingFiles: Record<string, {
 }> = {};
  
 let pendingOutgoingAccept: Record<string, (accepted: boolean) => void> = {};
+let incomingSavePaths: Record<string, string> = {};
+
+export function setIncomingFileSavePath(fileId: string, path: string) {
+  incomingSavePaths[fileId] = path;
+}
  
 async function waitForIceGatheringComplete(pc: RTCPeerConnection, timeoutMs = 15000): Promise<void> {
   if (pc.iceGatheringState === "complete") return;
@@ -372,7 +378,7 @@ export async function startSession(hostId: string, handlers: SessionHandlers): P
           name: payload.file_name,
           size: payload.file_size,
           received: 0,
-          path: "", // We'll set this when user accepts
+          path: incomingSavePaths[payload.file_id] || "",
           chunks: []
         };
       } else if (msgType === MessageType.FILE_CHUNK) {
@@ -385,25 +391,41 @@ export async function startSession(hostId: string, handlers: SessionHandlers): P
       } else if (msgType === MessageType.FILE_END) {
         const f = incomingFiles[payload.file_id];
         if (f) {
-          // Combine chunks and save
-          const blobs = f.chunks.map(b64 => {
+          // Decode all base64 chunks into a single byte array and save to the path
+          // chosen by the client when accepting the file offer.
+          const decodedChunks = f.chunks.map((b64) => {
             const bin = atob(b64);
             const arr = new Uint8Array(bin.length);
             for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
             return arr;
           });
-          const blob = new Blob(blobs);
-          
-          // In Tauri, we can use a command to save this truly to disk if we want.
-          // For now, we'll just trigger a browser download.
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = f.name;
-          a.click();
-          URL.revokeObjectURL(url);
- 
-          handlers.onFileDone(f.name, "Downloads", "recv");
+          const totalSize = decodedChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+          const bytes = new Uint8Array(totalSize);
+          let offset = 0;
+          for (const chunk of decodedChunks) {
+            bytes.set(chunk, offset);
+            offset += chunk.length;
+          }
+
+          if (f.path) {
+            await invoke("save_received_file", {
+              path: f.path,
+              bytes: Array.from(bytes)
+            });
+            handlers.onFileDone(f.name, f.path, "recv");
+          } else {
+            // Fallback if no explicit path was stored (should be rare).
+            const blob = new Blob([bytes]);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = f.name;
+            a.click();
+            URL.revokeObjectURL(url);
+            handlers.onFileDone(f.name, "Downloads", "recv");
+          }
+
+          delete incomingSavePaths[payload.file_id];
           delete incomingFiles[payload.file_id];
         }
       }
