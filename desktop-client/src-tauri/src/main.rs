@@ -10,43 +10,67 @@ struct AppState {
     input_helper_process: Arc<Mutex<Option<Child>>>,
 }
  
-#[tauri::command]
-fn start_host(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
-    let mut lock = state.host_process.lock().map_err(|_| "Failed to lock state")?;
-    if lock.is_some() {
-        // Check if it's actually still running
-        if let Some(child) = lock.as_mut() {
-            match child.try_wait() {
-                Ok(None) => return Err("Host already running".into()), // Still running
-                _ => *lock = None, // Finished or error, so we can restart
-            }
+// ✅ Cross-platform Python detection
+fn find_python() -> String {
+    let candidates = if cfg!(target_os = "windows") {
+        vec![
+            "./venv/Scripts/python.exe",
+            "../venv/Scripts/python.exe",
+            "../../venv/Scripts/python.exe",
+            "python",
+        ]
+    } else {
+        vec![
+            "./venv/bin/python",
+            "../venv/bin/python",
+            "../../venv/bin/python",
+            "python3",
+            "python",
+        ]
+    };
+ 
+    for path in &candidates {
+        if std::path::Path::new(path).exists() || which::which(path).is_ok() {
+            return path.to_string();
         }
     }
  
-    // Detect python executable (check venv in multiple locations)
-    let python_cmd = if std::path::Path::new("./venv/Scripts/python.exe").exists() {
-        "./venv/Scripts/python.exe".to_string()
-    } else if std::path::Path::new("../venv/Scripts/python.exe").exists() {
-        "../venv/Scripts/python.exe".to_string()
-    } else if std::path::Path::new("../../venv/Scripts/python.exe").exists() {
-        "../../venv/Scripts/python.exe".to_string()
-    } else {
-        "python".to_string()
-    };
+    "python3".to_string()
+}
  
-    // Detect script path
-    let script_path = if std::path::Path::new("../host/main.py").exists() {
-        "../host/main.py"
-    } else if std::path::Path::new("../../host/main.py").exists() {
-        "../../host/main.py"
-    } else {
-        "host/main.py" // Fallback
-    };
+// ✅ FIXED: no move issue
+fn find_script(possible_paths: Vec<&str>) -> String {
+    for path in &possible_paths {
+        if std::path::Path::new(path).exists() {
+            return path.to_string();
+        }
+    }
+    possible_paths.last().unwrap_or(&"").to_string()
+}
+ 
+#[tauri::command]
+fn start_host(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
+    let mut lock = state.host_process.lock().map_err(|_| "Failed to lock state")?;
+ 
+    if let Some(child) = lock.as_mut() {
+        if child.try_wait().ok().flatten().is_none() {
+            return Err("Host already running".into());
+        }
+        *lock = None;
+    }
+ 
+    let python_cmd = find_python();
+ 
+    let script_path = find_script(vec![
+        "../host/main.py",
+        "../../host/main.py",
+        "host/main.py",
+    ]);
  
     println!("Starting python host: {} {}", python_cmd, script_path);
  
     let mut child = Command::new(&python_cmd)
-        .arg(script_path)
+        .arg(&script_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -55,29 +79,22 @@ fn start_host(app: AppHandle, state: State<'_, AppState>) -> Result<String, Stri
  
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
+ 
     *lock = Some(child);
  
-    // Stdout tracking thread
     let app_stdout = app.clone();
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                app_stdout.emit("host-stdout", l).ok();
-            }
+        for line in BufReader::new(stdout).lines().flatten() {
+            app_stdout.emit("host-stdout", line).ok();
         }
     });
  
-    // Stderr tracking thread
     let app_stderr = app.clone();
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
-        let reader = BufReader::new(stderr);
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                app_stderr.emit("host-stderr", l).ok();
-            }
+        for line in BufReader::new(stderr).lines().flatten() {
+            app_stderr.emit("host-stderr", line).ok();
         }
     });
  
@@ -94,49 +111,42 @@ fn stop_host(state: State<'_, AppState>) -> Result<String, String> {
         Err("Host not running".into())
     }
 }
-
+ 
 #[tauri::command]
 fn send_host_command(state: State<'_, AppState>, cmd: String) -> Result<(), String> {
     let mut lock = state.host_process.lock().map_err(|_| "Failed to lock state")?;
+ 
     if let Some(child) = lock.as_mut() {
-        if let Some(mut stdin) = child.stdin.as_mut() {
-            writeln!(stdin, "{}", cmd).map_err(|e| format!("Failed to write to host stdin: {}", e))?;
-            stdin.flush().map_err(|e| format!("Failed to flush host stdin: {}", e))?;
+        if let Some(stdin) = child.stdin.as_mut() {
+            writeln!(stdin, "{}", cmd).map_err(|e| e.to_string())?;
+            stdin.flush().map_err(|e| e.to_string())?;
             return Ok(());
         }
     }
+ 
     Err("Host not running or stdin not available".into())
 }
  
 #[tauri::command]
 fn start_input_helper(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     let mut lock = state.input_helper_process.lock().map_err(|_| "Failed to lock state")?;
+ 
     if lock.is_some() {
         return Err("Input helper already running".into());
     }
  
-    // Detect python executable
-    let python_cmd = if std::path::Path::new("./venv/Scripts/python.exe").exists() {
-        "./venv/Scripts/python.exe".to_string()
-    } else if std::path::Path::new("../venv/Scripts/python.exe").exists() {
-        "../venv/Scripts/python.exe".to_string()
-    } else {
-        "python".to_string()
-    };
+    let python_cmd = find_python();
  
-    // Detect script path
-    let script_path = if std::path::Path::new("../client/input_helper.py").exists() {
-        "../client/input_helper.py"
-    } else if std::path::Path::new("../../client/input_helper.py").exists() {
-        "../../client/input_helper.py"
-    } else {
-        "client/input_helper.py"
-    };
+    let script_path = find_script(vec![
+        "../client/input_helper.py",
+        "../../client/input_helper.py",
+        "client/input_helper.py",
+    ]);
  
     println!("Starting input helper: {} {}", python_cmd, script_path);
  
     let mut child = Command::new(&python_cmd)
-        .arg(script_path)
+        .arg(&script_path)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -145,29 +155,22 @@ fn start_input_helper(app: AppHandle, state: State<'_, AppState>) -> Result<Stri
  
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
+ 
     *lock = Some(child);
  
-    // Stdout tracking
     let app_stdout = app.clone();
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                app_stdout.emit("input-helper-stdout", l).ok();
-            }
+        for line in BufReader::new(stdout).lines().flatten() {
+            app_stdout.emit("input-helper-stdout", line).ok();
         }
     });
  
-    // Stderr tracking
     let app_stderr = app.clone();
     std::thread::spawn(move || {
         use std::io::{BufRead, BufReader};
-        let reader = BufReader::new(stderr);
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                app_stderr.emit("input-helper-stderr", l).ok();
-            }
+        for line in BufReader::new(stderr).lines().flatten() {
+            app_stderr.emit("input-helper-stderr", line).ok();
         }
     });
  
@@ -177,6 +180,7 @@ fn start_input_helper(app: AppHandle, state: State<'_, AppState>) -> Result<Stri
 #[tauri::command]
 fn stop_input_helper(state: State<'_, AppState>) -> Result<String, String> {
     let mut lock = state.input_helper_process.lock().map_err(|_| "Failed to lock state")?;
+ 
     if let Some(mut child) = lock.take() {
         let _ = child.kill();
         Ok("Input helper stopped".into())
@@ -184,22 +188,28 @@ fn stop_input_helper(state: State<'_, AppState>) -> Result<String, String> {
         Err("Input helper not running".into())
     }
 }
-
+ 
 #[tauri::command]
-fn set_input_helper_active(state: State<'_, AppState>, active: bool) -> Result<(), String> {
+fn set_input_helper_active(
+    state: State<'_, AppState>,
+    active: bool,
+) -> Result<(), String> {
     let mut lock = state.input_helper_process.lock().map_err(|_| "Failed to lock state")?;
+ 
     if let Some(child) = lock.as_mut() {
-        if let Some(mut stdin) = child.stdin.as_mut() {
+        if let Some(stdin) = child.stdin.as_mut() {
             let cmd = if active {
                 r#"{"command":"resume"}"#
             } else {
                 r#"{"command":"pause"}"#
             };
-            writeln!(stdin, "{}", cmd).map_err(|e| format!("Failed to write to input_helper stdin: {}", e))?;
-            stdin.flush().map_err(|e| format!("Failed to flush input_helper stdin: {}", e))?;
+ 
+            writeln!(stdin, "{}", cmd).map_err(|e| e.to_string())?;
+            stdin.flush().map_err(|e| e.to_string())?;
             return Ok(());
         }
     }
+ 
     Err("Input helper not running or lacks stdin".into())
 }
  
@@ -221,4 +231,3 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
- 
