@@ -4,11 +4,12 @@ import { sessionManager } from "../services/sessionManager";
 interface ChatPanelProps {
   lines: { who: string; text: string; fileOffer?: { id: string; name: string; size: number } }[];
   onSendChat: (text: string) => void;
-  onSendFile: (file: File) => void;
+  onSendFile: (file?: File) => void;
   onRespondFile: (id: string, accept: boolean) => void;
   fileProgress?: { name: string; progress: number; total: number; direction: "send" | "recv" };
   disabled?: boolean;
   onFocus?: () => void;
+  mode?: "host" | "client";
 }
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({ 
@@ -18,7 +19,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onRespondFile,
   fileProgress,
   disabled,
-  onFocus
+  onFocus,
+  mode = "client"
 }) => {
   const [draft, setDraft] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -30,6 +32,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   };
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (mode !== "client") return;
     const file = e.target.files?.[0];
     if (file) {
       onSendFile(file);
@@ -86,7 +89,13 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         <button 
           className="icon-button" 
           title="Send File" 
-          onClick={() => fileInputRef.current?.click()}
+          onClick={() => {
+            if (mode === "host") {
+              onSendFile();
+              return;
+            }
+            fileInputRef.current?.click();
+          }}
           disabled={disabled}
         >
           📎

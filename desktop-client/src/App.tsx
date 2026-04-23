@@ -183,12 +183,16 @@ export default function App() {
   const sendChatNow = (text: string) => {
     if (connected) {
       sessionManager.sendChat(text);
-      setChatLines((prev) => [...prev, { who: "You", text }]);
+      // Host receives its own chat back via host event stream, so avoid double-appending.
+      if (mode !== "host") {
+        setChatLines((prev) => [...prev, { who: "You", text }]);
+      }
     }
   };
 
-  const sendFileNow = async (file: File) => {
+  const sendFileNow = async (file?: File) => {
     if (mode === "client" && connected) {
+      if (!file) return;
       setChatLines((prev) => [...prev, { who: "You", text: `Offering file: ${file.name}` }]);
       await sessionManager.sendFile(file, (p) => {
         setFileProgress({ name: file.name, progress: p, total: file.size, direction: "send" });
@@ -462,7 +466,8 @@ export default function App() {
               onSendFile={sendFileNow}
               onRespondFile={respondFileNow}
               fileProgress={fileProgress || undefined}
-              disabled={!connected && mode === "client"}
+              disabled={!connected}
+              mode={mode === "host" ? "host" : "client"}
             />
           )}
         </div>

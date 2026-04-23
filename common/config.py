@@ -1,43 +1,43 @@
 import json
 import logging
 import os
-
+ 
 _log = logging.getLogger(__name__)
-
+ 
 # Networking
 # When using Ngrok, keep SIGNALING_HOST as "0.0.0.0"
 SIGNALING_HOST = os.getenv("SIGNALING_HOST", "0.0.0.0")
 SIGNALING_PORT = 8080
-
+ 
 # FOR NGROK: Change this to "wss://xxxx.ngrok-free.app"
 # FOR LOCAL: It will automatically use ws://0.0.0.0:8080
 SIGNALING_URL = os.getenv("SIGNALING_URL", "wss://kiera-unsensory-kathrine.ngrok-free.dev")
 NO_RELAY = os.getenv("NO_RELAY", "").lower() in ("1", "true", "yes")
-
-
+ 
+ 
 def _metered_turn_urls_udp_first() -> list[str]:
     """UDP TURN first (lower latency when UDP is allowed)."""
     return [
-        "turn:in.relay.metered.ca:80",
-        "turn:in.relay.metered.ca:80?transport=tcp",
-        "turn:in.relay.metered.ca:443",
-        "turns:in.relay.metered.ca:443?transport=tcp",
+        "turn:global.relay.metered.ca:80",
+        "turn:global.relay.metered.ca:80?transport=tcp",
+        "turn:global.relay.metered.ca:443",
+        "turns:global.relay.metered.ca:443?transport=tcp",
     ]
-
-
+ 
+ 
 def _metered_turn_urls_tcp_first() -> list[str]:
     """
     TURNS/TCP first — best default for internet / office firewalls.
     aiortc only applies the *first* TURN URL it sees (see rtcicetransport.connection_kwargs).
     """
     return [
-        "turns:in.relay.metered.ca:443?transport=tcp",
-        "turn:in.relay.metered.ca:443",
-        "turn:in.relay.metered.ca:80?transport=tcp",
-        "turn:in.relay.metered.ca:80",
+        "turns:global.relay.metered.ca:443?transport=tcp",
+        "turn:global.relay.metered.ca:443",
+        "turn:global.relay.metered.ca:80?transport=tcp",
+        "turn:global.relay.metered.ca:80",
     ]
-
-
+ 
+ 
 def _default_ice_servers() -> list[dict]:
     if NO_RELAY:
         # STUN-only mode (no TURN relay). Direct P2P only.
@@ -49,12 +49,12 @@ def _default_ice_servers() -> list[dict]:
                 ]
             }
         ]
-
+ 
     # Metered TURN server
-    turn_user = os.getenv("TURN_USERNAME", "f373f8da17f6818e4bc590e4")
-    turn_cred = os.getenv("TURN_CREDENTIAL", "srwU+4T4iV3f9ef6")
+    turn_user = os.getenv("TURN_USERNAME", "c894966699c66679c3390061")
+    turn_cred = os.getenv("TURN_CREDENTIAL", "92jXJel4DvwtYk5L")
     turn_urls = _metered_turn_urls_tcp_first()
-    
+   
     return [
         {
             "urls": [
@@ -64,8 +64,8 @@ def _default_ice_servers() -> list[dict]:
         },
         {"urls": turn_urls, "username": turn_user, "credential": turn_cred},
     ]
-
-
+ 
+ 
 def _load_ice_servers() -> list[dict]:
     raw = os.getenv("ICE_SERVERS_JSON")
     if not raw:
@@ -78,12 +78,12 @@ def _load_ice_servers() -> list[dict]:
     except (json.JSONDecodeError, ValueError) as e:
         _log.warning("ICE_SERVERS_JSON invalid (%s); using built-in defaults", e)
         return _default_ice_servers()
-    
-    
+   
+   
 # STUN / TURN — required for NAT traversal across different networks.
 # Override: ICE_SERVERS_JSON, or TURN_USERNAME + TURN_CREDENTIAL, or ICE_UDP_TURN_FIRST=1.
 ICE_SERVERS = _load_ice_servers()
-
+ 
 # Video settings
 # 24 FPS is a better default for interactive remote control over internet links:
 # it reduces bitrate spikes during full-window changes while staying visually smooth.
@@ -103,25 +103,26 @@ QUALITY_SETTINGS = {
         "jpeg_quality": 85,
     }
 }
-
+ 
 # WebRTC video codec/bitrate tuning.
 # Note: Your current `aiortc` version supports `VP8` and `H264` (not `VP9`).
 VIDEO_CODEC = os.getenv("VIDEO_CODEC", "h264").lower()  # "vp8" or "h264"
 VIDEO_BITRATE = int(os.getenv("VIDEO_BITRATE", "4500000"))  # bits per second
 VIDEO_BITRATE_MIN = int(os.getenv("VIDEO_BITRATE_MIN", "1800000"))
 VIDEO_BITRATE_MAX = int(os.getenv("VIDEO_BITRATE_MAX", "8000000"))
-
+ 
 # Capture-side resolution guardrail for smoother real-time streaming.
 # Useful when host desktop is 2K/4K and bandwidth/CPU are limited.
 # Set either value to 0 to disable that cap.
 CAPTURE_MAX_WIDTH = int(os.getenv("CAPTURE_MAX_WIDTH", "1920"))
 CAPTURE_MAX_HEIGHT = int(os.getenv("CAPTURE_MAX_HEIGHT", "1080"))
-
+ 
 # Data Channel Names
 CTRL_CHANNEL_NAME = "control"
 CHAT_CHANNEL_NAME = "chat"
 FILE_CHANNEL_NAME = "file"
-
+ 
 # Logging Config
 def setup_logging(level=logging.INFO):
     logging.basicConfig(level=level, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+ 
