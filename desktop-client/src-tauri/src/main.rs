@@ -11,32 +11,59 @@ struct AppState {
     input_helper_process: Arc<Mutex<Option<Child>>>,
 }
  
-// ✅ Cross-platform Python detection
+/// Python with project deps (aiortc, etc.). Prefer HELPDESK_PYTHON, then venvs at repo root.
 fn find_python() -> String {
-    let candidates = if cfg!(target_os = "windows") {
-        vec![
-            "./venv/Scripts/python.exe",
-            "../venv/Scripts/python.exe",
-            "../../venv/Scripts/python.exe",
-            "python",
-        ]
-    } else {
-        vec![
-            "./venv/bin/python",
-            "../venv/bin/python",
-            "../../venv/bin/python",
-            "python3",
-            "python",
-        ]
-    };
- 
-    for path in &candidates {
-        if std::path::Path::new(path).exists() || which::which(path).is_ok() {
-            return path.to_string();
+    if let Ok(explicit) = std::env::var("HELPDESK_PYTHON") {
+        let t = explicit.trim();
+        if !t.is_empty() && std::path::Path::new(t).exists() {
+            return t.to_string();
         }
     }
  
-    "python3".to_string()
+    let venv_dirs = [
+        "venv",
+        ".venv",
+        "venv310",
+        "venv311",
+        "env",
+    ];
+    let rel_prefixes = ["./", "../", "../../", "../../../"];
+ 
+    let mut candidates: Vec<String> = Vec::new();
+    for prefix in rel_prefixes {
+        for dir in venv_dirs {
+            if cfg!(target_os = "windows") {
+                candidates.push(format!("{}{}/Scripts/python.exe", prefix, dir));
+            } else {
+                candidates.push(format!("{}{}/bin/python", prefix, dir));
+            }
+        }
+    }
+ 
+    if cfg!(target_os = "windows") {
+        candidates.push("python".to_string());
+    } else {
+        candidates.push("python3".to_string());
+        candidates.push("python".to_string());
+    }
+ 
+    for path in &candidates {
+        if std::path::Path::new(path).exists() {
+            return path.clone();
+        }
+    }
+ 
+    for path in &["python3", "python"] {
+        if which::which(path).is_ok() {
+            return (*path).to_string();
+        }
+    }
+ 
+    if cfg!(target_os = "windows") {
+        "python".to_string()
+    } else {
+        "python3".to_string()
+    }
 }
  
 // ✅ FIXED: no move issue
@@ -213,7 +240,7 @@ fn set_input_helper_active(
  
     Err("Input helper not running or lacks stdin".into())
 }
-
+ 
 #[tauri::command]
 fn save_received_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
     let normalized = if let Some(rest) = path.strip_prefix("file://") {
@@ -229,7 +256,7 @@ fn save_received_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
     } else {
         path.clone()
     };
-
+ 
     fs::write(&normalized, bytes)
         .map_err(|e| format!("Failed to save file to {}: {}", normalized, e))
 }
