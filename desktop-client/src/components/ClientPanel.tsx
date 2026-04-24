@@ -67,9 +67,6 @@ export const ClientPanel: React.FC<ClientPanelProps> = ({
   return (
     <div className="client-panel">
       <div className="toolbar">
-        <button type="button" className="secondary" onClick={onBack} style={{ marginRight: '8px' }}>
-          Back
-        </button>
         <input
           type="text"
           placeholder="Enter Host ID"

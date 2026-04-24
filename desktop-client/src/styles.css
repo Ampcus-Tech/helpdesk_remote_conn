@@ -28,7 +28,7 @@ body,
   height: 100%;
 }
 
-.client-panel, .host-panel {
+.client-panel {
   flex: 1;
   display: flex;
   flex-direction: column;
@@ -36,11 +36,21 @@ body,
   height: 100%;
 }
 
+.host-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  padding-top: 40px; /* Space for floating Back button */
+}
+
 .toolbar {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
+  padding-left: 140px; /* Space for the floating Back button */
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;

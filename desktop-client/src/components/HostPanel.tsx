@@ -24,19 +24,6 @@ export const HostPanel: React.FC<HostPanelProps> = ({
 }) => {
   return (
     <div className="host-panel" style={{ padding: '20px', textAlign: 'center', position: 'relative' }}>
-      <button 
-        className="secondary" 
-        onClick={onBack} 
-        style={{ 
-          position: 'absolute', 
-          top: '10px', 
-          left: '10px', 
-          padding: '4px 12px', 
-          fontSize: '12px' 
-        }}
-      >
-        Back
-      </button>
       {warning && (
         <div style={{ 
           background: '#fff4ce', 

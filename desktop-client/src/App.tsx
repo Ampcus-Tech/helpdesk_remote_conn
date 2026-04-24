@@ -7,6 +7,7 @@ import { sessionManager, SessionMode } from "./services/sessionManager";
 import HostPanel from "./components/HostPanel";
 import ClientPanel from "./components/ClientPanel";
 import ChatPanel from "./components/ChatPanel";
+import logo from "./assets/logo.png";
 
 const MOUSE_MOVE_INTERVAL_MS = 1000 / 60;
 const DC_BUFFER_CAP = 24 * 1024;
@@ -399,7 +400,8 @@ export default function App() {
   return (
     <div className="layout">
       {mode === "idle" ? (
-        <div className="landing-screen" style={{ height: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+        <div className="landing-screen" style={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+          <img src={logo} alt="Logo" style={{ width: '150px', height: '150px', marginBottom: '30px', filter: 'drop-shadow(0 10px 15px rgba(0,0,0,0.1))', borderRadius: '24px' }} />
           <h1 style={{ marginBottom: '40px' }}>Remote Helpdesk</h1>
           <div style={{ display: 'flex', gap: '20px' }}>
             <button style={{ padding: '20px 40px', fontSize: '18px' }} onClick={() => setMode("client")}>
@@ -412,52 +414,50 @@ export default function App() {
           <p style={{ marginTop: '20px', color: '#666' }}>Choose your role to get started.</p>
         </div>
       ) : (
-        <div style={{ display: 'flex', width: '100%', height: '100%' }}>
-          <div style={{ flex: 1, position: 'relative' }}>
-            <button
-              style={{ position: 'absolute', top: 10, left: 10, zIndex: 100, padding: '4px 8px', fontSize: '12px' }}
-              onClick={disconnect}
-            >
-              Back to Menu
-            </button>
+        <div style={{ flex: 1, position: 'relative' }}>
+          <button
+            style={{ position: 'absolute', top: 10, left: 10, zIndex: 100, padding: '6px 12px', fontSize: '12px' }}
+            onClick={disconnect}
+          >
+            Back to Menu
+          </button>
 
-            {mode === "host" ? (
-              <HostPanel
-                hostId={hostId}
-                status={status}
-                running={mode === "host"}
-                onStart={startHost}
-                onStop={disconnect}
-                chatOpen={chatOpen}
-                onToggleChat={() => setChatOpen(!chatOpen)}
-                warning={hostWarning}
-                onBack={disconnect}
-              />
-            ) : (
-              <ClientPanel
-                hostId={hostId}
-                setHostId={setHostId}
-                status={status}
-                connecting={connecting}
-                connected={connected}
-                onConnect={startClient}
-                onDisconnect={disconnect}
-                videoRef={videoRef}
-                wrapRef={wrapRef}
-                cursorStyle={cursorStyle}
-                onPointerMove={onPointerMove}
-                onPointerDown={onPointerDown}
-                onPointerUp={onPointerUp}
-                onPointerCancel={onPointerCancel}
-                onDoubleClick={onDoubleClick}
-                onKey={onKey}
-                releaseAllKeys={releaseAllKeys}
-                chatOpen={chatOpen}
-                onToggleChat={() => setChatOpen(!chatOpen)}
-                onBack={disconnect}
-              />
-            )}
-          </div>
+          {mode === "host" ? (
+            <HostPanel
+              hostId={hostId}
+              status={status}
+              running={mode === "host"}
+              onStart={startHost}
+              onStop={disconnect}
+              chatOpen={chatOpen}
+              onToggleChat={() => setChatOpen(!chatOpen)}
+              warning={hostWarning}
+              onBack={disconnect}
+            />
+          ) : (
+            <ClientPanel
+              hostId={hostId}
+              setHostId={setHostId}
+              status={status}
+              connecting={connecting}
+              connected={connected}
+              onConnect={startClient}
+              onDisconnect={disconnect}
+              videoRef={videoRef}
+              wrapRef={wrapRef}
+              cursorStyle={cursorStyle}
+              onPointerMove={onPointerMove}
+              onPointerDown={onPointerDown}
+              onPointerUp={onPointerUp}
+              onPointerCancel={onPointerCancel}
+              onDoubleClick={onDoubleClick}
+              onKey={onKey}
+              releaseAllKeys={releaseAllKeys}
+              chatOpen={chatOpen}
+              onToggleChat={() => setChatOpen(!chatOpen)}
+              onBack={disconnect}
+            />
+          )}
 
           {chatOpen && (
             <ChatPanel
