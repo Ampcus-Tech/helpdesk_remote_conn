@@ -36,17 +36,6 @@ This remote desktop application requires macOS security permissions to function 
  
 ## Troubleshooting
  
-### "trace trap" Error
-If you see `zsh: trace trap python host/gui_app.py`:
- 
-1. **Check all three permissions** above are granted
-2. **Restart your terminal** after granting permissions
-3. **Restart the application**
- 
-### Application Still Crashes
-1. Open **Console.app** to see detailed error logs
-2. Look for permission-related error messages
-3. Try running with `python host/main.py` (non-GUI version) first
  
 ### For Packaged Applications (.app bundles)
 When distributing as a packaged application:

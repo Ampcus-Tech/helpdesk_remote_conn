@@ -6,8 +6,7 @@ A Python-based remote desktop core (WebRTC via `aiortc`, WebSocket signaling, `m
 
 - `signaling/`: WebSocket server for SDP relay.
 - `host/`: Host application capturing the screen and receiving input (Python).
-- `client/`: Legacy Python viewer (`webrtc_client` + Tk/OpenCV window) — still available.
-- `desktop-client/`: **Recommended viewer** — Tauri shell + React UI + browser WebRTC (same signaling + data-channel protocol as the Python client).
+- `desktop-client/`: Tauri shell + React UI + browser WebRTC.
 - `common/`: Shared config, message structs, and utils.
 
 ## Installation
@@ -21,7 +20,7 @@ A Python-based remote desktop core (WebRTC via `aiortc`, WebSocket signaling, `m
    ```bash
    pip install -r requirements.txt
    ```
-  *Note: `aiortc`, `websockets`, `mss`, `pynput`, `opencv-python`, `PyQt6` are required. PyAV is automatically installed with `aiortc`.*
+  *Note: `aiortc`, `websockets`, `mss`, `pynput`, `opencv-python` are required. PyAV is automatically installed with `aiortc`.*
 
 ## Running the Application
 
@@ -40,7 +39,7 @@ python host/main.py
 ```
 This will output a 6-digit Host ID (e.g., `123456`). Keep this window open.
 
-### 3. Start the Client (Tauri + React viewer, recommended)
+### 3. Start the Client (Tauri + React viewer)
 
 Prerequisites: [Node.js](https://nodejs.org/), [Rust](https://www.rust-lang.org/tools/install) (for Tauri), same signaling URL and STUN/TURN settings as `common/config.py`.
 
@@ -54,31 +53,6 @@ npm run tauri dev
 
 Enter the host ID in the UI and connect. Production build: `npm run tauri build`.
 
-### 3b. Python viewer (legacy)
-
-```bash
-python client/main.py
-```
-
-When prompted, enter the 6-digit Host ID, or pass it as an argument:
-
-```bash
-python client/main.py 123456
-```
-
-### (Optional) Start the GUI Applications
-If you want a Host/Client “application-like” UI:
-
-Host PC (shows generated Host ID):
-```bash
-python host/gui_app.py
-```
-
-Client PC (enter Host ID and click Connect):
-```bash
-python client/gui_app.py
-```
-After connecting, an OpenCV video window appears on the Client side and the PyQt6 window provides Chat/Files tabs on both sides.
 
 ## P2P Chat and File Transfer
 
