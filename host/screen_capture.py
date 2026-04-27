@@ -1,17 +1,18 @@
-import mss
-import cv2
-import numpy as np
-import time
-import platform
+import asyncio
+import os
 import sys
+import platform
+import time
+
+import cv2
+import mss
+import numpy as np
 from av import VideoFrame
 from aiortc import VideoStreamTrack
 
-import sys
-import os
+# Add parent directory to path to import common
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from common.config import TARGET_FPS, DEFAULT_QUALITY, QUALITY_SETTINGS
-from common.config import CAPTURE_MAX_WIDTH, CAPTURE_MAX_HEIGHT
+from common.config import TARGET_FPS, DEFAULT_QUALITY, QUALITY_SETTINGS, CAPTURE_MAX_WIDTH, CAPTURE_MAX_HEIGHT
 
 class ScreenCaptureTrack(VideoStreamTrack):
     kind = "video"
@@ -61,7 +62,6 @@ class ScreenCaptureTrack(VideoStreamTrack):
             wait = 0
             
         if wait > 0:
-            import asyncio
             await asyncio.sleep(wait)
             
         sct_img = self.sct.grab(self.monitor)

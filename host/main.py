@@ -1,9 +1,12 @@
 import asyncio
+import json
 import random
 import string
 import sys
 import os
+from multiprocessing import Queue
 
+# Ensure we can import from parent directory
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from common.config import setup_logging
 from host.webrtc_host import WebRTCHost
@@ -14,7 +17,6 @@ def generate_host_id(length=6):
 async def read_commands(host: WebRTCHost):
     """Read commands from stdin and put them into the host's command_queue."""
     if not host.command_queue:
-        from multiprocessing import Queue
         host.command_queue = Queue()
         
     loop = asyncio.get_running_loop()
@@ -72,8 +74,6 @@ async def main():
     )
 
 if __name__ == "__main__":
-    import json
-    from multiprocessing import Queue
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
