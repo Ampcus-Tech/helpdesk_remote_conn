@@ -402,7 +402,7 @@ export default function App() {
       {mode === "idle" ? (
         <LandingScreen onSetMode={setMode} onStartHost={startHost} />
       ) : (
-        <div style={{ flex: 1, position: 'relative' }}>
+        <div style={{ flex: 1, position: 'relative', display: 'flex' }}>
           <button
             style={{ position: 'absolute', top: 10, left: 10, zIndex: 100, padding: '6px 12px', fontSize: '12px' }}
             onClick={disconnect}
