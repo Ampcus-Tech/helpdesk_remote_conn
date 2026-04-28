@@ -53,6 +53,119 @@ npm run tauri dev
 
 Enter the host ID in the UI and connect. Production build: `npm run tauri build`.
 
+## Build & Packaging (Standalone Installers)
+
+This repo bundles the **Python host tools** into standalone binaries using **PyInstaller**, then ships them inside the **Tauri** desktop app as `resources/`. The end result is a single installer that runs on machines **without Python installed**.
+
+### What gets bundled
+
+- **Tauri app (Rust)**: the main desktop app (`remote-desktop-client.exe` on Windows).
+- **Python Host**: `host/main.py` → `host.exe` (Windows) or `host` (macOS/Linux).
+- **Python Input Helper**: `client/input_helper.py` → `input_helper.exe` (Windows) or `input_helper` (macOS/Linux).
+
+These Python binaries are copied to:
+
+- `desktop-client/src-tauri/resources/`
+
+and included in the final installer by `desktop-client/src-tauri/tauri.conf.json` (`bundle.resources`).
+
+### Prerequisites (all platforms)
+
+- **Python 3.10+**
+- **Node.js + npm**
+- **Rust stable**
+
+### Step 0: Create Python venv (recommended)
+
+From repo root:
+
+```bash
+python -m venv .venv
+```
+
+Activate:
+
+```bash
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+
+# macOS / Linux
+source .venv/bin/activate
+```
+
+Install Python deps:
+
+```bash
+pip install -r requirements.txt
+pip install pyinstaller
+```
+
+### Step 1: Build `host` and `input_helper` binaries (PyInstaller)
+
+Run the prebuild script (recommended; this is what Tauri calls automatically during `cargo tauri build`):
+
+```bash
+python build_scripts/prebuild.py
+```
+
+Outputs:
+
+- PyInstaller outputs: `build_scripts/dist/`
+- Copied into Tauri resources: `desktop-client/src-tauri/resources/`
+
+### Step 2: Build the desktop app + installer (Tauri)
+
+Install frontend deps once:
+
+```bash
+cd desktop-client
+npm install
+cd ..
+```
+
+Optional but recommended: point the build to your venv Python (used by `desktop-client/src-tauri/build.rs`):
+
+```bash
+# Windows PowerShell
+$env:HELPDESK_PYTHON = "$pwd\\.venv\\Scripts\\python.exe"
+
+# macOS / Linux
+export HELPDESK_PYTHON="$PWD/.venv/bin/python"
+```
+
+Now build the installer (run this on the target OS):
+
+```bash
+cd desktop-client/src-tauri
+cargo tauri build
+```
+
+### Output locations
+
+- **Windows (NSIS installer)**:
+  - `desktop-client/src-tauri/target/release/bundle/nsis/*setup.exe`
+- **macOS (DMG)**:
+  - `desktop-client/src-tauri/target/release/bundle/dmg/*.dmg`
+- **Linux (DEB)**:
+  - `desktop-client/src-tauri/target/release/bundle/deb/*.deb`
+
+### Common Windows issue: `PermissionError` while rebuilding
+
+If you see a `PermissionError` copying `resources/host.exe`, it usually means `host.exe` is still running (Windows locks the file).
+
+Fix:
+
+```powershell
+taskkill /IM host.exe /F
+```
+
+Then rerun:
+
+```powershell
+cd desktop-client/src-tauri
+cargo tauri build
+```
+
 
 ## P2P Chat and File Transfer
 

@@ -18,7 +18,6 @@ interface ClientPanelProps {
   onDoubleClick: (e: React.MouseEvent) => void;
   onKey: (e: React.KeyboardEvent) => void;
   releaseAllKeys: () => void;
-  onBack: () => void;
   chatOpen: boolean;
   onToggleChat: () => void;
 }
@@ -41,7 +40,6 @@ export const ClientPanel: React.FC<ClientPanelProps> = ({
   onDoubleClick,
   onKey,
   releaseAllKeys,
-  onBack,
   chatOpen,
   onToggleChat
 }) => {

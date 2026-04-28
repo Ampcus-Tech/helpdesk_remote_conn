@@ -62,7 +62,6 @@ export default function App() {
     return localIsMac !== remoteIsMac;
   }, [remoteOS]);
   const [hostWarning, setHostWarning] = useState<string | null>(null);
-  const [localInputActive, setLocalInputActive] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -139,7 +138,13 @@ export default function App() {
       onHostWarning: setHostWarning,
       onHostInfo: setRemoteOS,
       onFileOffer: (id, name, size) => {
-        setChatLines((prev) => [...prev, { who: "Host", text: `Sent a file offer.`, fileOffer: { id, name, size } }]);
+        // Ensure the receiver can see the Accept/Reject UI (it lives in ChatPanel).
+        setChatOpen(true);
+        const sender = mode === "host" ? "Client" : "Host";
+        setChatLines((prev) => [
+          ...prev,
+          { who: sender, text: `Incoming file offer.`, fileOffer: { id, name, size } },
+        ]);
       },
       onFileProgress: (name, progress, total, direction) => {
         const now = Date.now();
@@ -153,7 +158,7 @@ export default function App() {
         setChatLines((prev) => [...prev, { who: "SYSTEM", text: `${direction === "send" ? "Sent" : "Received"} ${name} successfully.` }]);
       }
     });
-  }, [disconnect]);
+  }, [disconnect, mode]);
 
   const startHost = async () => {
     setMode("host");
@@ -420,7 +425,6 @@ export default function App() {
               chatOpen={chatOpen}
               onToggleChat={() => setChatOpen(!chatOpen)}
               warning={hostWarning}
-              onBack={disconnect}
             />
           ) : (
             <ClientPanel
@@ -443,7 +447,6 @@ export default function App() {
               releaseAllKeys={releaseAllKeys}
               chatOpen={chatOpen}
               onToggleChat={() => setChatOpen(!chatOpen)}
-              onBack={disconnect}
             />
           )}
 

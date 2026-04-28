@@ -10,8 +10,9 @@ import numpy as np
 from av import VideoFrame
 from aiortc import VideoStreamTrack
 
-# Add parent directory to path to import common
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# For bundled app, the common directory is copied to the bundle root
+# No need for sys.path manipulation
+
 from common.config import TARGET_FPS, DEFAULT_QUALITY, QUALITY_SETTINGS, CAPTURE_MAX_WIDTH, CAPTURE_MAX_HEIGHT
 
 class ScreenCaptureTrack(VideoStreamTrack):

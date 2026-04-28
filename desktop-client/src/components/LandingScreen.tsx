@@ -1,4 +1,4 @@
-import logo from "../assets/logo.png";
+import logo from "../assets/ApmcusLogo.png"
 import { SessionMode } from "../services/sessionManager";
 
 interface LandingScreenProps {

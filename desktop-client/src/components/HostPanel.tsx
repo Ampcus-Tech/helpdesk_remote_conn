@@ -7,7 +7,6 @@ interface HostPanelProps {
   onStart: () => void;
   onStop: () => void;
   warning?: string | null;
-  onBack: () => void;
   chatOpen: boolean;
   onToggleChat: () => void;
 }
@@ -20,7 +19,7 @@ export const HostPanel: React.FC<HostPanelProps> = ({
   onStop, 
   chatOpen,
   onToggleChat,
-  warning, onBack
+  warning
 }) => {
   return (
     <div className="host-panel" style={{ padding: '20px', textAlign: 'center', position: 'relative' }}>

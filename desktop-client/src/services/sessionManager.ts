@@ -28,7 +28,6 @@ export type SessionEvents = {
 };
  
 class SessionManager {
-  private mode: SessionMode = "idle";
   private jsSession: ActiveSession | null = null;
   private unlisteners: UnlistenFn[] = [];
   private events: Partial<SessionEvents> = {};
@@ -218,7 +217,6 @@ class SessionManager {
     // Always attempt to stop the helper so no global keyboard hook survives
     // after disconnects, failed sessions, or mode switches.
     void this.stopInputHelper();
-    this.mode = "idle";
     this.unlisteners.forEach((u) => u());
     this.unlisteners = [];
   }

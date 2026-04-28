@@ -19,7 +19,12 @@ except ImportError:
     ctypes = None
 
 import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# For bundled app, add the executable directory to path
+if getattr(sys, 'frozen', False):
+    # Running in a bundle
+    bundle_dir = os.path.dirname(sys.executable)
+    sys.path.insert(0, bundle_dir)
+
 from common.messages import SignalingMessage, MessageType, ControlMessage
 from common.config import (
     SIGNALING_URL,

@@ -5,7 +5,9 @@ import platform
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# For bundled app, the common directory is copied to the bundle root
+# No need for sys.path manipulation
+
 from common.messages import ControlMessage
 
 logger = logging.getLogger("input_receiver")

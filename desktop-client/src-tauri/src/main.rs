@@ -75,7 +75,27 @@ fn find_script(possible_paths: Vec<&str>) -> String {
     }
     possible_paths.last().unwrap_or(&"").to_string()
 }
- 
+
+fn is_bundled_app() -> bool {
+    // Check if we're running from a bundled app by looking for the resources directory
+    let exe_path = std::env::current_exe().unwrap_or_default();
+    let fallback = std::path::PathBuf::new();
+    let app_dir = exe_path.parent().unwrap_or(&fallback);
+    app_dir.join("resources").exists()
+}
+
+fn get_bundled_binary_path(binary_name: &str) -> String {
+    let exe_path = std::env::current_exe().unwrap_or_default();
+    let fallback = std::path::PathBuf::new();
+    let app_dir = exe_path.parent().unwrap_or(&fallback);
+
+    if cfg!(target_os = "windows") {
+        format!("{}/resources/{}.exe", app_dir.display(), binary_name)
+    } else {
+        format!("{}/resources/{}", app_dir.display(), binary_name)
+    }
+}
+
 #[tauri::command]
 fn start_host(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     let mut lock = state.host_process.lock().map_err(|_| "Failed to lock state")?;
@@ -87,21 +107,37 @@ fn start_host(app: AppHandle, state: State<'_, AppState>) -> Result<String, Stri
         *lock = None;
     }
  
-    let python_cmd = find_python();
- 
-    let script_path = find_script(vec![
-        "../host/main.py",
-        "../../host/main.py",
-        "host/main.py",
-    ]);
- 
-    println!("Starting python host: {} {}", python_cmd, script_path);
- 
-    let mut child = Command::new(&python_cmd)
-        .arg(&script_path)
+    let (cmd, args) = if is_bundled_app() {
+        // Use bundled binary
+        let binary_path = get_bundled_binary_path("host");
+        println!("Starting bundled host: {}", binary_path);
+        (binary_path, vec![])
+    } else {
+        // Use Python script (development mode)
+        let python_cmd = find_python();
+        let script_path = find_script(vec![
+            "../host/main.py",
+            "../../host/main.py",
+            "host/main.py",
+        ]);
+        println!("Starting python host: {} {}", python_cmd, script_path);
+        (python_cmd, vec![script_path])
+    };
+
+    let mut command = Command::new(&cmd);
+    command
+        .args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let mut child = command
         .spawn()
         .map_err(|e| format!("Failed to spawn python host: {}", e))?;
  
@@ -163,21 +199,37 @@ fn start_input_helper(app: AppHandle, state: State<'_, AppState>) -> Result<Stri
         return Err("Input helper already running".into());
     }
  
-    let python_cmd = find_python();
- 
-    let script_path = find_script(vec![
-        "../client/input_helper.py",
-        "../../client/input_helper.py",
-        "client/input_helper.py",
-    ]);
- 
-    println!("Starting input helper: {} {}", python_cmd, script_path);
- 
-    let mut child = Command::new(&python_cmd)
-        .arg(&script_path)
+    let (cmd, args) = if is_bundled_app() {
+        // Use bundled binary
+        let binary_path = get_bundled_binary_path("input_helper");
+        println!("Starting bundled input helper: {}", binary_path);
+        (binary_path, vec![])
+    } else {
+        // Use Python script (development mode)
+        let python_cmd = find_python();
+        let script_path = find_script(vec![
+            "../client/input_helper.py",
+            "../../client/input_helper.py",
+            "client/input_helper.py",
+        ]);
+        println!("Starting input helper: {} {}", python_cmd, script_path);
+        (python_cmd, vec![script_path])
+    };
+
+    let mut command = Command::new(&cmd);
+    command
+        .args(&args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let mut child = command
         .spawn()
         .map_err(|e| format!("Failed to spawn input helper: {}", e))?;
  
