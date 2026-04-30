@@ -119,6 +119,7 @@ class WebRTCHost:
         self._channels_ready = False
         self._file_msg_queue = asyncio.Queue()
         self._file_worker_task = None
+        self._control_channel = None
         
         # Cursor tracking state (Cross-platform ready)
         self._cursor_handles = {}
@@ -198,6 +199,8 @@ class WebRTCHost:
         def on_datachannel(channel):
             logger.info(f"Data channel {channel.label} received")
             if channel.label == CTRL_CHANNEL_NAME:
+                self._control_channel = channel
+                
                 @channel.on("open")
                 def on_ctrl_open():
                     logger.info("Control channel opened. Sending host info.")
@@ -217,7 +220,10 @@ class WebRTCHost:
                 def on_message(message):
                     try:
                         msg = ControlMessage.from_json(message)
-                        self._control_queue.put_nowait(msg)
+                        if msg.type == MessageType.DISCONNECT:
+                            self._emit("Host has disconnected the connection.")
+                        else:
+                            self._control_queue.put_nowait(msg)
                     except Exception as e:
                         logger.error(f"Error queuing control message: {e}")
             elif channel.label == CHAT_CHANNEL_NAME:
@@ -232,6 +238,15 @@ class WebRTCHost:
             logger.info(f"ICE connection state is {self.pc.iceConnectionState}")
             if self.pc.iceConnectionState == "failed":
                 await self.pc.close()
+            elif self.pc.iceConnectionState in ["disconnected", "closed"]:
+                # Send disconnect notification to client if we still have control channel
+                if hasattr(self, '_control_channel') and self._control_channel and self._control_channel.readyState == "open":
+                    try:
+                        msg = ControlMessage(type=MessageType.DISCONNECT)
+                        self._control_channel.send(msg.to_json())
+                    except Exception:
+                        pass
+                self._emit("Client has disconnected the connection.")
 
     def _emit_chat(self, sender: str, text: str) -> None:
         try:
@@ -654,6 +669,28 @@ class WebRTCHost:
                 )
                 await self.ws.send(ans_msg.to_json())
 
+    async def disconnect(self):
+        """Gracefully disconnect from the client."""
+        try:
+            # Send disconnect message if control channel is available
+            if self._control_channel and self._control_channel.readyState == "open":
+                msg = ControlMessage(type=MessageType.DISCONNECT)
+                self._control_channel.send(msg.to_json())
+                
+            # Close all connections
+            if self.pc:
+                await self.pc.close()
+            if self.ws:
+                await self.ws.close()
+                
+        except Exception as e:
+            logger.error(f"Error during disconnect: {e}")
+            # Still try to close connections even if sending message fails
+            if self.pc:
+                await self.pc.close()
+            if self.ws:
+                await self.ws.close()
+
     async def _process_commands(self):
         """Poll the incoming command queue from the UI process."""
         if not self.command_queue:
@@ -680,7 +717,10 @@ class WebRTCHost:
                 elif kind == "respond_file_offer":
                     self.respond_file_offer(cmd["file_id"], cmd["save_path"])
                 elif kind == "shutdown":
+                    await self.disconnect()
                     break
+                elif kind == "disconnect":
+                    await self.disconnect()
                     
             except Exception as e:
                 logger.error(f"Error in command processing: {e}")

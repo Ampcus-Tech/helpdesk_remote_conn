@@ -25,6 +25,7 @@ class MessageType:
     FILE_CHUNK = "file_chunk"
     FILE_END = "file_end"
     HOST_INFO = "host_info"
+    DISCONNECT = "disconnect"
 
 @dataclass
 class SignalingMessage:

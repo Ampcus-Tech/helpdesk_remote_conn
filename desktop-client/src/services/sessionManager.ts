@@ -153,6 +153,15 @@ class SessionManager {
   }
  
   async stopClient() {
+    // Send disconnect message before stopping
+    if (this.jsSession?.channels.ctrl?.readyState === "open") {
+      try {
+        this.jsSession.channels.ctrl.send(JSON.stringify({ type: "disconnect" }));
+      } catch (e) {
+        console.error("Failed to send disconnect message:", e);
+      }
+    }
+    
     this.stopInputHelper().catch(console.error);
     this.jsSession?.close();
     this.jsSession = null;

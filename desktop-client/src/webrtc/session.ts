@@ -333,6 +333,10 @@ export async function startSession(hostId: string, handlers: SessionHandlers): P
     if (!text) return;
     try {
       const o = JSON.parse(text) as { type?: string; cursor_name?: string };
+      if (o.type === MessageType.DISCONNECT) {
+        handlers.onSessionEnd("Host has disconnected the connection.");
+        return;
+      }
       if (o.type === MessageType.CURSOR_UPDATE && o.cursor_name) {
         handlers.onCursorName(o.cursor_name);
         return;
@@ -447,8 +451,20 @@ export async function startSession(hostId: string, handlers: SessionHandlers): P
     const st = pc.iceConnectionState;
     console.log('ICE connection state:', st);
     handlers.onStatus(`ICE: ${st}`);
-    if (st === "failed") {
-      handlers.onSessionEnd("ICE failed");
+    if (st === "failed" || st === "disconnected" || st === "closed") {
+      // Send disconnect message to host if control channel is still open
+      if (ctrl.readyState === "open") {
+        try {
+          ctrl.send(JSON.stringify({ type: MessageType.DISCONNECT }));
+        } catch (e) {
+          console.error("Failed to send disconnect message:", e);
+        }
+      }
+      if (st === "failed") {
+        handlers.onSessionEnd("ICE failed");
+      } else {
+        handlers.onSessionEnd("Client has disconnected the connection.");
+      }
     }
   };
  

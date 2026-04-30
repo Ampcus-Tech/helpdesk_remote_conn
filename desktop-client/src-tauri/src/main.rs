@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
  
 struct AppState {
     host_process: Arc<Mutex<Option<Child>>>,
@@ -314,7 +314,7 @@ fn save_received_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
 }
  
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(AppState {
             host_process: Arc::new(Mutex::new(None)),
             input_helper_process: Arc::new(Mutex::new(None)),
@@ -329,6 +329,21 @@ fn main() {
             set_input_helper_active,
             save_received_file
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            if let Ok(mut lock) = app_handle.state::<AppState>().host_process.lock() {
+                if let Some(mut child) = lock.take() {
+                    let _ = child.kill();
+                }
+            }
+            if let Ok(mut lock) = app_handle.state::<AppState>().input_helper_process.lock() {
+                if let Some(mut child) = lock.take() {
+                    let _ = child.kill();
+                }
+            }
+        }
+    });
 }

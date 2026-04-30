@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ask, message } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import { MessageType } from "./protocol";
 import { pointerToVideoFrame } from "./webrtc/coords";
 import { mapKeyboardEvent } from "./webrtc/keyboard";
@@ -86,7 +89,7 @@ export default function App() {
     pressedKeys.current.clear();
   }, []);
 
-  const disconnect = useCallback(() => {
+  const disconnect = useCallback(async () => {
     releaseAllKeys();
     setHostWarning(null);
     if (moveTimer.current != null) {
@@ -95,16 +98,16 @@ export default function App() {
     }
     moveArmed.current = false;
     lastPointer.current = null;
-
+ 
     if (mode === "client") {
-      sessionManager.stopClient();
+      await sessionManager.stopClient();
     } else if (mode === "host") {
-      sessionManager.stopHost();
+      await sessionManager.stopHost();
     }
-
+ 
     const v = videoRef.current;
     if (v) v.srcObject = null;
-
+ 
     setConnected(false);
     setConnecting(false);
     setStatus("Disconnected");
@@ -120,9 +123,15 @@ export default function App() {
         setConnected(true);
         setConnecting(false);
       },
-      onDisconnected: (reason) => {
+      onDisconnected: async (reason) => {
         setStatus(reason || "Disconnected");
+        const currentMode = mode;
         disconnect();
+        if (currentMode === "host") {
+          await message("Client has disconnected the connection.", { title: "Disconnection", kind: "info" });
+        } else if (currentMode === "client") {
+          await message("Host has disconnected the connection.", { title: "Disconnection", kind: "info" });
+        }
       },
       onChatReceived: (who, text) => {
         setChatLines((prev) => [...prev, { who, text }]);
@@ -259,6 +268,54 @@ export default function App() {
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [releaseAllKeys]);
+
+  const modeRef = useRef(mode);
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
+  useEffect(() => {
+    let unlistenFn: (() => void) | null = null;
+
+    const setup = async () => {
+      const win = getCurrentWindow();
+      unlistenFn = await win.onCloseRequested(async (event) => {
+        if (modeRef.current !== "idle") {
+          event.preventDefault();
+          const confirmed = await ask(
+            "An active connection is running. Are you sure you want to disconnect and exit?",
+            { title: "Confirm Exit", kind: "warning" }
+          );
+          if (confirmed) {
+            // Send disconnect message before disconnecting
+            if (modeRef.current === "client") {
+              const sess = sessionManager.getActiveSession();
+              if (sess?.channels.ctrl?.readyState === "open") {
+                try {
+                  sess.channels.ctrl.send(JSON.stringify({ type: "disconnect" }));
+                } catch (e) {
+                  console.error("Failed to send disconnect message:", e);
+                }
+              }
+            } else if (modeRef.current === "host") {
+              await invoke("send_host_command", {
+                cmd: JSON.stringify({ type: "disconnect" })
+              });
+            }
+            
+            await disconnect();
+            await win.destroy();
+          }
+        }
+      });
+    };
+
+    setup();
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, [disconnect]);
 
   useEffect(() => {
     const el = wrapRef.current;
@@ -409,7 +466,14 @@ export default function App() {
       ) : (
         <div style={{ flex: 1, position: 'relative', display: 'flex' }}>
           <button
-            style={{ position: 'absolute', top: 10, left: 10, zIndex: 100, padding: '6px 12px', fontSize: '12px' }}
+            style={{ 
+              position: 'absolute', 
+              top: 10, 
+              left: 10, 
+              zIndex: 100, 
+              padding: '6px 12px', 
+              fontSize: '12px' 
+            }}
             onClick={disconnect}
           >
             Back to Menu
