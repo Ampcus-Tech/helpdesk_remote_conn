@@ -333,7 +333,9 @@ export async function startSession(hostId: string, handlers: SessionHandlers): P
     if (!text) return;
     try {
       const o = JSON.parse(text) as { type?: string; cursor_name?: string };
+      console.log("Received control message:", o);
       if (o.type === MessageType.DISCONNECT) {
+        console.log("Received disconnect message from host");
         handlers.onSessionEnd("Host has disconnected the connection.");
         return;
       }

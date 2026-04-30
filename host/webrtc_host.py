@@ -221,6 +221,7 @@ class WebRTCHost:
                     try:
                         msg = ControlMessage.from_json(message)
                         if msg.type == MessageType.DISCONNECT:
+                            logger.info("Received disconnect message from client")
                             self._emit("Host has disconnected the connection.")
                         else:
                             self._control_queue.put_nowait(msg)
@@ -244,8 +245,11 @@ class WebRTCHost:
                     try:
                         msg = ControlMessage(type=MessageType.DISCONNECT)
                         self._control_channel.send(msg.to_json())
-                    except Exception:
-                        pass
+                        logger.info("Sent disconnect message to client")
+                    except Exception as e:
+                        logger.error(f"Failed to send disconnect message: {e}")
+                else:
+                    logger.warning("Control channel not available for disconnect notification")
                 self._emit("Client has disconnected the connection.")
 
     def _emit_chat(self, sender: str, text: str) -> None:

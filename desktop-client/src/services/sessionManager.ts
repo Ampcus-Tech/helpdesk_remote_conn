@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { MessageType } from "../protocol";
 import { ActiveSession, startSession, sendChatLine, sendFile, respondFileOffer, setIncomingFileSavePath } from "../webrtc/session";
  
 export type SessionMode = "idle" | "host" | "client";
@@ -156,7 +157,7 @@ class SessionManager {
     // Send disconnect message before stopping
     if (this.jsSession?.channels.ctrl?.readyState === "open") {
       try {
-        this.jsSession.channels.ctrl.send(JSON.stringify({ type: "disconnect" }));
+        this.jsSession.channels.ctrl.send(JSON.stringify({ type: MessageType.DISCONNECT }));
       } catch (e) {
         console.error("Failed to send disconnect message:", e);
       }

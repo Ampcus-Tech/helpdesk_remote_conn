@@ -292,7 +292,7 @@ export default function App() {
               const sess = sessionManager.getActiveSession();
               if (sess?.channels.ctrl?.readyState === "open") {
                 try {
-                  sess.channels.ctrl.send(JSON.stringify({ type: "disconnect" }));
+                  sess.channels.ctrl.send(JSON.stringify({ type: MessageType.DISCONNECT }));
                 } catch (e) {
                   console.error("Failed to send disconnect message:", e);
                 }
