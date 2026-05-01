@@ -153,7 +153,7 @@ class SessionManager {
   }
  
   async stopClient() {
-    this.stopInputHelper().catch(console.error);
+    await this.stopInputHelper().catch(console.error);
     this.jsSession?.close();
     this.jsSession = null;
     this.cleanup();

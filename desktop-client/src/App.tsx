@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageType } from "./protocol";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { pointerToVideoFrame } from "./webrtc/coords";
 import { mapKeyboardEvent } from "./webrtc/keyboard";
 import { sessionManager, SessionMode } from "./services/sessionManager";
+import { confirm, open, save } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 
 import HostPanel from "./components/HostPanel";
 import ClientPanel from "./components/ClientPanel";
@@ -86,7 +89,7 @@ export default function App() {
     pressedKeys.current.clear();
   }, []);
 
-  const disconnect = useCallback(() => {
+  const disconnect = useCallback(async () => {
     releaseAllKeys();
     setHostWarning(null);
     if (moveTimer.current != null) {
@@ -97,9 +100,9 @@ export default function App() {
     lastPointer.current = null;
 
     if (mode === "client") {
-      sessionManager.stopClient();
+      await sessionManager.stopClient();
     } else if (mode === "host") {
-      sessionManager.stopHost();
+      await sessionManager.stopHost();
     }
 
     const v = videoRef.current;
@@ -205,7 +208,7 @@ export default function App() {
       });
     } else if (mode === "host" && connected) {
       // In host mode, we use Tauri to pick a file path
-      const { open } = await import("@tauri-apps/plugin-dialog");
+      // const { open } = await import("@tauri-apps/plugin-dialog");
       const path = await open({
         multiple: false,
         directory: false,
@@ -221,7 +224,7 @@ export default function App() {
     if (mode === "client" && connected) {
       let savePath: string | null = null;
       if (accept) {
-        const { save } = await import("@tauri-apps/plugin-dialog");
+        // const { save } = await import("@tauri-apps/plugin-dialog");
         const offer = chatLines.find(l => l.fileOffer?.id === id)?.fileOffer;
         savePath = await save({
           defaultPath: offer?.name
@@ -234,7 +237,7 @@ export default function App() {
     } else if (mode === "host" && connected) {
       let savePath: string | null = null;
       if (accept) {
-        const { save } = await import("@tauri-apps/plugin-dialog");
+        // const { save } = await import("@tauri-apps/plugin-dialog");
         const offer = chatLines.find(l => l.fileOffer?.id === id)?.fileOffer;
         savePath = await save({
           defaultPath: offer?.name
@@ -246,6 +249,59 @@ export default function App() {
       setChatLines((prev) => prev.map(l => l.fileOffer?.id === id ? { ...l, fileOffer: undefined, text: l.text + (accept ? " (Accepted)" : " (Rejected)") } : l));
     }
   };
+
+  // Use a ref to keep the close handler stable without re-registering
+  const stateRef = useRef({ mode, disconnect });
+  useEffect(() => {
+    stateRef.current = { mode, disconnect };
+  }, [mode, disconnect]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    const setup = async () => {
+      unlisten = await getCurrentWindow().onCloseRequested(async (event) => {
+        // Always prevent default so we have control
+        event.preventDefault();
+
+        const { mode: currentMode, disconnect: currentDisconnect } = stateRef.current;
+        console.log("Close requested. Current mode:", currentMode);
+
+        // Show warning for ANY active session (Host or Client)
+        if (currentMode === "host" || currentMode === "client") {
+          const confirmed = await confirm(
+            "A session is currently active. Do you want to disconnect and exit?",
+            { title: "Remote Desktop", kind: "warning" }
+          );
+
+          if (!confirmed) {
+            console.log("Close cancelled by user");
+            return;
+          }
+        }
+
+        console.log("Proceeding with cleanup and exit...");
+
+        try {
+          // Add a 1.5s timeout so the window closes even if cleanup hangs
+          await Promise.race([
+            currentDisconnect(),
+            new Promise((resolve) => setTimeout(resolve, 1500))
+          ]);
+        } catch (e) {
+          console.error("Cleanup failed:", e);
+        } finally {
+          await invoke("close_app");
+        }
+      });
+    };
+
+    setup();
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []); // Run exactly once on mount
 
   useEffect(() => {
     const onBlur = () => releaseAllKeys();

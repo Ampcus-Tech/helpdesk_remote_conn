@@ -5,6 +5,7 @@ import time
 import threading
 import ctypes
 import platform
+import signal
 from pynput.keyboard import Listener as KeyboardListener, Key, KeyCode
  
 # Add parent dir to path to import common
@@ -57,7 +58,20 @@ class InputHelper:
         self._stop_event = threading.Event()
         self._active = True
         self._state_lock = threading.Lock()
-       
+        
+        # Setup signal handlers
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+    
+    def _signal_handler(self, signum, frame):
+        print(f"Received signal {signum}, shutting down...", flush=True)
+        self.stop()
+        sys.exit(0)
+
+    def stop(self):
+        self._stop_event.set()
+        self._stop_listener()
+
     def _is_target_window_foreground(self) -> bool:
         system = platform.system()
         if system == "Windows":
@@ -112,7 +126,10 @@ class InputHelper:
  
     def _stop_listener(self):
         if self._listener:
-            self._listener.stop()
+            try:
+                self._listener.stop()
+            except:
+                pass
             self._listener = None
  
     def _start_listener(self):
@@ -134,8 +151,9 @@ class InputHelper:
         while not self._stop_event.is_set():
             line = sys.stdin.readline()
             if not line:
-                time.sleep(0.05)
-                continue
+                # Stdin closed, we should exit
+                self.stop()
+                break
             try:
                 payload = json.loads(line.strip())
             except Exception:
@@ -187,4 +205,4 @@ class InputHelper:
  
 if __name__ == "__main__":
     helper = InputHelper()
-    helper.run()
+    helper.run()

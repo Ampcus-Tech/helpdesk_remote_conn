@@ -4,6 +4,7 @@ import random
 import string
 import sys
 import os
+import signal
 from multiprocessing import Queue
 
 # For bundled app, add the executable directory to path
@@ -25,13 +26,15 @@ async def read_commands(host: WebRTCHost):
         
     loop = asyncio.get_running_loop()
     while True:
-        line = await loop.run_in_executor(None, sys.stdin.readline)
-        if not line:
-            break
         try:
+            line = await loop.run_in_executor(None, sys.stdin.readline)
+            if not line:
+                break
             cmd = json.loads(line)
             host.command_queue.put(cmd)
         except Exception as e:
+            # If stdin is closed, we should probably exit
+            if not line: break
             print(f"Error parsing command: {e}", file=sys.stderr)
 
 async def main():
@@ -70,15 +73,31 @@ async def main():
         on_file_progress=on_file_progress,
         on_file_done=on_file_done
     )
-    
+
+    # Handle termination signals
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, lambda: asyncio.create_task(host.stop()))
+        except NotImplementedError:
+            # add_signal_handler is not implemented on Windows
+            pass
+
     # Run the command listener and the host concurrently
-    await asyncio.gather(
-        host.run(),
-        read_commands(host)
-    )
+    try:
+        await asyncio.gather(
+            host.run(),
+            read_commands(host)
+        )
+    except asyncio.CancelledError:
+        print("Host tasks cancelled", flush=True)
+    finally:
+        await host.stop()
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Host terminated by user")
+        print("Host terminated by user", flush=True)
+    except SystemExit:
+        pass

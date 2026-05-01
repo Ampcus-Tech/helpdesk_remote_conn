@@ -44,22 +44,20 @@ def _default_ice_servers() -> list[dict]:
         return [
             {
                 "urls": [
-                    "stun:stun.l.google.com:19302",
-                    "stun:stun1.l.google.com:19302",
+                    "stun:stun.relay.metered.ca:80",
                 ]
             }
         ]
  
     # Metered TURN server
-    turn_user = os.getenv("TURN_USERNAME", "c894966699c66679c3390061")
-    turn_cred = os.getenv("TURN_CREDENTIAL", "92jXJel4DvwtYk5L")
+    turn_user = os.getenv("TURN_USERNAME", "8c4cb97452bc0a8a581f5204")
+    turn_cred = os.getenv("TURN_CREDENTIAL", "w8i0Nu0BX9KK+aGv")
     turn_urls = _metered_turn_urls_tcp_first()
    
     return [
         {
             "urls": [
-                "stun:stun.l.google.com:19302",
-                "stun:stun1.l.google.com:19302",
+                "stun:stun.relay.metered.ca:80",
             ]
         },
         {"urls": turn_urls, "username": turn_user, "credential": turn_cred},

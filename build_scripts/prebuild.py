@@ -151,6 +151,15 @@ def copy_binaries_to_resources():
         dist_binary = spec_dir / 'dist' / binary_name
         if dist_binary.exists():
             target_path = tauri_resources_dir / binary_name
+            
+            # Kill any running instance of this binary to prevent lock errors (Windows only)
+            if platform_name == 'windows':
+                try:
+                    subprocess.run(['taskkill', '/F', '/IM', binary_name, '/T'], 
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
+
             if target_path.exists():
                 try:
                     os.chmod(target_path, 0o666)
@@ -159,8 +168,6 @@ def copy_binaries_to_resources():
                 try:
                     target_path.unlink()
                 except Exception:
-                    # If something is still locking the file (e.g. antivirus scan),
-                    # fall back to overwriting via copy2 to a temp name first.
                     pass
             shutil.copy2(dist_binary, target_path)
             binaries.append(target_path)

@@ -96,6 +96,17 @@ fn get_bundled_binary_path(binary_name: &str) -> String {
     }
 }
 
+fn kill_process_by_name(name: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("taskkill")
+            .args(&["/F", "/IM", name, "/T"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .status();
+    }
+}
+
 #[tauri::command]
 fn start_host(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
     let mut lock = state.host_process.lock().map_err(|_| "Failed to lock state")?;
@@ -107,6 +118,9 @@ fn start_host(app: AppHandle, state: State<'_, AppState>) -> Result<String, Stri
         *lock = None;
     }
  
+    // Proactively kill any dangling host processes
+    kill_process_by_name("host.exe");
+
     let (cmd, args) = if is_bundled_app() {
         // Use bundled binary
         let binary_path = get_bundled_binary_path("host");
@@ -168,8 +182,20 @@ fn start_host(app: AppHandle, state: State<'_, AppState>) -> Result<String, Stri
 #[tauri::command]
 fn stop_host(state: State<'_, AppState>) -> Result<String, String> {
     let mut lock = state.host_process.lock().map_err(|_| "Failed to lock state")?;
-    if let Some(mut child) = lock.take() {
-        let _ = child.kill();
+    if let Some(child) = lock.take() {
+        let pid = child.id();
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill")
+                .args(&["/F", "/PID", &pid.to_string(), "/T"])
+                .creation_flags(0x08000000)
+                .status();
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = child.kill();
+        }
         Ok("Host stopped".into())
     } else {
         Err("Host not running".into())
@@ -199,6 +225,10 @@ fn start_input_helper(app: AppHandle, state: State<'_, AppState>) -> Result<Stri
         return Err("Input helper already running".into());
     }
  
+    // Proactively kill any dangling helper processes
+    kill_process_by_name("input_helper.exe");
+    kill_process_by_name("input_handler.exe");
+
     let (cmd, args) = if is_bundled_app() {
         // Use bundled binary
         let binary_path = get_bundled_binary_path("input_helper");
@@ -261,8 +291,20 @@ fn start_input_helper(app: AppHandle, state: State<'_, AppState>) -> Result<Stri
 fn stop_input_helper(state: State<'_, AppState>) -> Result<String, String> {
     let mut lock = state.input_helper_process.lock().map_err(|_| "Failed to lock state")?;
  
-    if let Some(mut child) = lock.take() {
-        let _ = child.kill();
+    if let Some(child) = lock.take() {
+        let pid = child.id();
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill")
+                .args(&["/F", "/PID", &pid.to_string(), "/T"])
+                .creation_flags(0x08000000)
+                .status();
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = child.kill();
+        }
         Ok("Input helper stopped".into())
     } else {
         Err("Input helper not running".into())
@@ -313,12 +355,61 @@ fn save_received_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
         .map_err(|e| format!("Failed to save file to {}: {}", normalized, e))
 }
  
+fn cleanup_processes(state: &AppState) {
+    // 1. Kill tracked processes first (by PID)
+    let mut host_lock = state.host_process.lock().unwrap();
+    if let Some(child) = host_lock.take() {
+        let pid = child.id();
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill")
+                .args(&["/F", "/PID", &pid.to_string(), "/T"])
+                .creation_flags(0x08000000)
+                .status();
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = child.kill();
+    }
+ 
+    let mut helper_lock = state.input_helper_process.lock().unwrap();
+    if let Some(child) = helper_lock.take() {
+        let pid = child.id();
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            let _ = std::process::Command::new("taskkill")
+                .args(&["/F", "/PID", &pid.to_string(), "/T"])
+                .creation_flags(0x08000000)
+                .status();
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = child.kill();
+    }
+
+    // 2. Perform a global name-based sweep as a fallback
+    // This catches any processes that might have detached from our PID tracking
+    kill_process_by_name("host.exe");
+    kill_process_by_name("input_helper.exe");
+    kill_process_by_name("input_handler.exe"); // Catch older or alternative names
+
+    // Give OS a moment to finalize termination
+    std::thread::sleep(std::time::Duration::from_millis(200));
+}
+
+#[tauri::command]
+fn close_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 fn main() {
+    let app_state = AppState {
+        host_process: Arc::new(Mutex::new(None)),
+        input_helper_process: Arc::new(Mutex::new(None)),
+    };
+
     tauri::Builder::default()
-        .manage(AppState {
-            host_process: Arc::new(Mutex::new(None)),
-            input_helper_process: Arc::new(Mutex::new(None)),
-        })
+        .manage(app_state)
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             start_host,
@@ -327,8 +418,16 @@ fn main() {
             start_input_helper,
             stop_input_helper,
             set_input_helper_active,
-            save_received_file
+            save_received_file,
+            close_app
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
-}
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                use tauri::Manager;
+                let state = app_handle.state::<AppState>();
+                cleanup_processes(&state);
+            }
+        });
+}
