@@ -15,6 +15,7 @@ export interface SessionState {
 export type SessionEvents = {
   onStatusChange: (status: string) => void;
   onHostIdGenerated: (id: string) => void;
+  onSessionPasswordGenerated: (password: string) => void;
   onConnected: () => void;
   onDisconnected: (reason?: string) => void;
   onChatReceived: (who: string, text: string) => void;
@@ -48,6 +49,9 @@ class SessionManager {
       if (line.includes("UI_SIGNAL:HOST_ID:")) {
         const id = line.split("UI_SIGNAL:HOST_ID:")[1].trim();
         this.events.onHostIdGenerated?.(id);
+      } else if (line.includes("UI_SIGNAL:SESSION_PASSWORD:")) {
+        const password = line.split("UI_SIGNAL:SESSION_PASSWORD:")[1].trim();
+        this.events.onSessionPasswordGenerated?.(password);
       } else if (line.includes("UI_SIGNAL:WARN:")) {
         const warn = line.split("UI_SIGNAL:WARN:")[1].trim();
         this.events.onHostWarning?.(warn);
@@ -116,11 +120,11 @@ class SessionManager {
     this.cleanup();
   }
  
-  async startClient(hostId: string) {
+  async startClient(connectionId: string, password: string) {
     this.events.onStatusChange?.("Connecting to host...");
  
     try {
-      this.jsSession = await startSession(hostId, {
+      this.jsSession = await startSession(connectionId, password, {
         onStatus: (msg) => this.events.onStatusChange?.(msg),
         onVideoStream: (stream) => this.events.onVideoStream?.(stream),
         onControlOpen: () => { },

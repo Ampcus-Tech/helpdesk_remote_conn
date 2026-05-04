@@ -2,6 +2,7 @@ import React from "react";
 
 interface HostPanelProps {
   hostId: string;
+  sessionPassword: string;
   status: string;
   running: boolean;
   onStart: () => void;
@@ -13,6 +14,7 @@ interface HostPanelProps {
 
 export const HostPanel: React.FC<HostPanelProps> = ({ 
   hostId, 
+  sessionPassword,
   status, 
   running, 
   onStart, 
@@ -59,9 +61,25 @@ export const HostPanel: React.FC<HostPanelProps> = ({
         margin: '0 auto 20px',
         maxWidth: '300px'
       }}>
-        <div style={{ fontSize: '14px', color: '#555', marginBottom: '8px', textTransform: 'uppercase' }}>Your Host ID</div>
-        <div style={{ fontSize: '32px', fontWeight: 'bold', letterSpacing: '4px', color: '#0078d4' }}>
+        <div style={{ fontSize: '14px', color: '#555', marginBottom: '8px', textTransform: 'uppercase' }}>Connection ID</div>
+        <div style={{ fontSize: '24px', fontWeight: 'bold', letterSpacing: '2px', color: '#0078d4' }}>
           {hostId || "------"}
+        </div>
+      </div>
+      <div className="id-container" style={{ 
+        background: '#f0f4f8', 
+        paddingLeft: '40px', 
+        paddingRight: '40px', 
+        paddingTop: '20px', 
+        paddingBottom: '20px', 
+        borderRadius: '12px',
+        border: '2px dashed #0078d4',
+        margin: '0 auto 20px',
+        maxWidth: '200px'
+      }}>
+        <div style={{ fontSize: '14px', color: '#555', marginBottom: '8px', textTransform: 'uppercase' }}> Password </div>
+        <div style={{ fontSize: '24px', fontWeight: 'bold', letterSpacing: '2px', color: '#0078d4' }}>
+          {sessionPassword || "------"}
         </div>
       </div>
 

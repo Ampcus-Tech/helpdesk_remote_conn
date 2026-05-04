@@ -1,11 +1,19 @@
 import asyncio
+import hashlib
 import json
-import random
-import string
+import platform
+import secrets
+import socket
 import sys
 import os
 import signal
+import uuid
 from multiprocessing import Queue
+
+# Ensure repo root is importable regardless of launcher working directory.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
 
 # For bundled app, add the executable directory to path
 if getattr(sys, 'frozen', False):
@@ -16,8 +24,30 @@ if getattr(sys, 'frozen', False):
 from common.config import setup_logging
 from host.webrtc_host import WebRTCHost
 
-def generate_host_id(length=6):
-    return ''.join(random.choices(string.digits, k=length))
+PBKDF2_ITERATIONS = 200_000
+
+def _hardware_fingerprint() -> str:
+    mac_addr = hex(uuid.getnode())
+    cpu = platform.processor() or "unknown-cpu"
+    hostname = socket.gethostname() or "unknown-host"
+    return f"{mac_addr}|{cpu}|{hostname}"
+
+def generate_hidden_host_id() -> str:
+    return hashlib.sha256(_hardware_fingerprint().encode("utf-8")).hexdigest()
+
+def derive_public_connection_id(hidden_host_id: str, length: int = 8) -> str:
+    digest = hashlib.sha256(f"public::{hidden_host_id}".encode("utf-8")).hexdigest()
+    digits_only = "".join(str(int(ch, 16) % 10) for ch in digest)
+    return digits_only[:length]
+
+def generate_session_password() -> str:
+    # Cryptographically secure 6-digit one-time session password.
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+def hash_password(password: str):
+    salt = secrets.token_bytes(16)
+    password_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF2_ITERATIONS)
+    return password_hash.hex(), salt.hex()
 
 async def read_commands(host: WebRTCHost):
     """Read commands from stdin and put them into the host's command_queue."""
@@ -39,11 +69,15 @@ async def read_commands(host: WebRTCHost):
 
 async def main():
     setup_logging()
-    host_id = generate_host_id()
+    hidden_host_id = generate_hidden_host_id()
+    connection_id = derive_public_connection_id(hidden_host_id)
+    session_password = generate_session_password()
+    password_hash, password_salt = hash_password(session_password)
     print("=========================================")
-    print(f"Host ID to connect: {host_id}")
-    # UI SIGNAL for Tauri/React to capture
-    print(f"UI_SIGNAL:HOST_ID:{host_id}", flush=True)
+    print(f"Connection ID to connect: {connection_id}")
+    print(f"Password: {session_password}")
+    print(f"UI_SIGNAL:HOST_ID:{connection_id}", flush=True)
+    print(f"UI_SIGNAL:SESSION_PASSWORD:{session_password}", flush=True)
     print("=========================================")
     
     def on_event(msg):
@@ -66,7 +100,10 @@ async def main():
         print(f"UI_SIGNAL:FILE_DONE:{json_data}", flush=True)
 
     host = WebRTCHost(
-        host_id, 
+        hidden_host_id,
+        connection_id=connection_id,
+        password_hash=password_hash,
+        password_salt=password_salt,
         on_event=on_event,
         on_chat=on_chat,
         on_file_offer=on_file_offer,

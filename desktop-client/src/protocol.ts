@@ -4,6 +4,8 @@ export const MessageType = {
   FIND_HOST: "find_host",
   HOST_REGISTERED: "host_registered",
   HOST_NOT_FOUND: "host_not_found",
+  AUTH_FAILED: "auth_failed",
+  AUTH_RATE_LIMITED: "auth_rate_limited",
   SDP: "sdp",
   ICE: "ice",
   MOUSE_MOVE: "mouse_move",

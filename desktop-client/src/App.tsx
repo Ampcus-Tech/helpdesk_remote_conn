@@ -50,6 +50,7 @@ function normalizeDialogPath(path: string): string {
 export default function App() {
   const [mode, setMode] = useState<SessionMode>("idle");
   const [hostId, setHostId] = useState("");
+  const [sessionPassword, setSessionPassword] = useState("");
   const [status, setStatus] = useState("Idle");
   const [connecting, setConnecting] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -119,6 +120,7 @@ export default function App() {
     sessionManager.setEvents({
       onStatusChange: setStatus,
       onHostIdGenerated: setHostId,
+      onSessionPasswordGenerated: setSessionPassword,
       onConnected: () => {
         setConnected(true);
         setConnecting(false);
@@ -171,14 +173,23 @@ export default function App() {
 
   const startClient = async () => {
     const id = hostId.trim();
+    const pwd = sessionPassword.trim();
     if (!id) {
-      setStatus("Enter a host ID");
+      setStatus("Enter a connection ID");
+      return;
+    }
+    if (!pwd) {
+      setStatus("Enter the password");
+      return;
+    }
+    if (pwd.length !== 6) {
+      setStatus("Password must be 6 digits");
       return;
     }
     setMode("client");
     setConnecting(true);
     setChatLines([]);
-    await sessionManager.startClient(id);
+    await sessionManager.startClient(id, pwd);
     const sess = sessionManager.getActiveSession();
     if (sess) {
       ctrlSendRef.current = (json) => {
@@ -474,6 +485,7 @@ export default function App() {
           {mode === "host" ? (
             <HostPanel
               hostId={hostId}
+              sessionPassword={sessionPassword}
               status={status}
               running={mode === "host"}
               onStart={startHost}
@@ -486,6 +498,8 @@ export default function App() {
             <ClientPanel
               hostId={hostId}
               setHostId={setHostId}
+              sessionPassword={sessionPassword}
+              setSessionPassword={setSessionPassword}
               status={status}
               connecting={connecting}
               connected={connected}

@@ -76,12 +76,25 @@ fn find_script(possible_paths: Vec<&str>) -> String {
     possible_paths.last().unwrap_or(&"").to_string()
 }
 
-fn is_bundled_app() -> bool {
-    // Check if we're running from a bundled app by looking for the resources directory
+fn has_bundled_binary(binary_name: &str) -> bool {
+    // Treat as bundled only when the expected bundled executable is present.
     let exe_path = std::env::current_exe().unwrap_or_default();
     let fallback = std::path::PathBuf::new();
     let app_dir = exe_path.parent().unwrap_or(&fallback);
-    app_dir.join("resources").exists()
+    let resources_dir = app_dir.join("resources");
+    if cfg!(target_os = "windows") {
+        resources_dir.join(format!("{}.exe", binary_name)).exists()
+    } else {
+        resources_dir.join(binary_name).exists()
+    }
+}
+
+fn should_use_bundled_binary(binary_name: &str) -> bool {
+    // In `tauri dev`, always prefer Python scripts so local code changes apply.
+    if cfg!(debug_assertions) {
+        return false;
+    }
+    has_bundled_binary(binary_name)
 }
 
 fn get_bundled_binary_path(binary_name: &str) -> String {
@@ -121,7 +134,7 @@ fn start_host(app: AppHandle, state: State<'_, AppState>) -> Result<String, Stri
     // Proactively kill any dangling host processes
     kill_process_by_name("host.exe");
 
-    let (cmd, args) = if is_bundled_app() {
+    let (cmd, args) = if should_use_bundled_binary("host") {
         // Use bundled binary
         let binary_path = get_bundled_binary_path("host");
         println!("Starting bundled host: {}", binary_path);
@@ -229,7 +242,7 @@ fn start_input_helper(app: AppHandle, state: State<'_, AppState>) -> Result<Stri
     kill_process_by_name("input_helper.exe");
     kill_process_by_name("input_handler.exe");
 
-    let (cmd, args) = if is_bundled_app() {
+    let (cmd, args) = if should_use_bundled_binary("input_helper") {
         // Use bundled binary
         let binary_path = get_bundled_binary_path("input_helper");
         println!("Starting bundled input helper: {}", binary_path);
@@ -430,4 +443,4 @@ fn main() {
                 cleanup_processes(&state);
             }
         });
-}
+}

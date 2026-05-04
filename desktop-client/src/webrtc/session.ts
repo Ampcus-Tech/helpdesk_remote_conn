@@ -112,7 +112,9 @@ export async function sendFile(fileChannel: RTCDataChannel, file: File, onProgre
     return false;
   }
 
-  const fileId = Math.random().toString(36).substring(2, 15);
+  const randomBytes = new Uint8Array(16);
+  crypto.getRandomValues(randomBytes);
+  const fileId = Array.from(randomBytes, (b) => b.toString(16).padStart(2, "0")).join("");
   const fileName = file.name;
   const fileSize = file.size;
   
@@ -278,7 +280,7 @@ export async function sendFile(fileChannel: RTCDataChannel, file: File, onProgre
 /**
  * Start viewer session: WebSocket signaling + WebRTC (matches Python `client/webrtc_client.py` flow).
  */
-export async function startSession(hostId: string, handlers: SessionHandlers): Promise<ActiveSession> {
+export async function startSession(connectionId: string, password: string, handlers: SessionHandlers): Promise<ActiveSession> {
   const signalingUrl = import.meta.env.VITE_SIGNALING_URL || "ws://127.0.0.1:8080";
   handlers.onStatus(`Signaling: ${signalingUrl}`);
  
@@ -460,7 +462,13 @@ export async function startSession(hostId: string, handlers: SessionHandlers): P
     }
   };
  
-  ws.send(JSON.stringify({ type: MessageType.FIND_HOST, host_id: hostId }));
+  ws.send(
+    JSON.stringify({
+      type: MessageType.FIND_HOST,
+      connection_id: connectionId,
+      password,
+    }),
+  );
  
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
@@ -485,7 +493,17 @@ export async function startSession(hostId: string, handlers: SessionHandlers): P
       }
       if (data.type === MessageType.HOST_NOT_FOUND) {
         window.clearTimeout(timer);
-        reject(new Error(`Host ${hostId} not found on signaling server`));
+        reject(new Error(`Connection ID ${connectionId} not found on signaling server`));
+        return;
+      }
+      if (data.type === MessageType.AUTH_FAILED) {
+        window.clearTimeout(timer);
+        reject(new Error("Authentication failed. Check password and try again."));
+        return;
+      }
+      if (data.type === MessageType.AUTH_RATE_LIMITED) {
+        window.clearTimeout(timer);
+        reject(new Error("Too many failed attempts. Please wait before retrying."));
         return;
       }
       if (data.type === MessageType.SDP && data.sdp?.sdp && data.sdp.type) {

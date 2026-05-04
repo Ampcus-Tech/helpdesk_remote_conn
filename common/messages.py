@@ -7,6 +7,8 @@ class MessageType:
     FIND_HOST = "find_host"
     HOST_REGISTERED = "host_registered"
     HOST_NOT_FOUND = "host_not_found"
+    AUTH_FAILED = "auth_failed"
+    AUTH_RATE_LIMITED = "auth_rate_limited"
     SDP = "sdp"
     ICE = "ice"
 
@@ -30,6 +32,11 @@ class MessageType:
 class SignalingMessage:
     type: str
     host_id: Optional[str] = None
+    connection_id: Optional[str] = None
+    password: Optional[str] = None
+    password_hash: Optional[str] = None
+    password_salt: Optional[str] = None
+    retry_after_seconds: Optional[int] = None
     sdp: Optional[Dict[str, Any]] = None
     candidate: Optional[Dict[str, Any]] = None
     

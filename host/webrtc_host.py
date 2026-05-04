@@ -87,6 +87,9 @@ class WebRTCHost:
     def __init__(
         self,
         host_id,
+        connection_id,
+        password_hash,
+        password_salt,
         on_event=None,
         on_chat=None,
         on_file_offer=None,
@@ -96,6 +99,9 @@ class WebRTCHost:
         command_queue=None,
     ):
         self.host_id = host_id
+        self.connection_id = connection_id
+        self.password_hash = password_hash
+        self.password_salt = password_salt
         self.pc = None
         self.ws = None
         self.command_queue = command_queue
@@ -618,7 +624,13 @@ class WebRTCHost:
             print("!"*60 + "\n")
             raise
         
-        reg_msg = SignalingMessage(type=MessageType.REGISTER_HOST, host_id=self.host_id)
+        reg_msg = SignalingMessage(
+            type=MessageType.REGISTER_HOST,
+            host_id=self.host_id,
+            connection_id=self.connection_id,
+            password_hash=self.password_hash,
+            password_salt=self.password_salt,
+        )
         await self.ws.send(reg_msg.to_json())
 
         async for message in self.ws:

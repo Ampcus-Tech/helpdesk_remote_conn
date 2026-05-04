@@ -3,6 +3,8 @@ import React from "react";
 interface ClientPanelProps {
   hostId: string;
   setHostId: (id: string) => void;
+  sessionPassword: string;
+  setSessionPassword: (password: string) => void;
   status: string;
   connecting: boolean;
   connected: boolean;
@@ -25,6 +27,8 @@ interface ClientPanelProps {
 export const ClientPanel: React.FC<ClientPanelProps> = ({
   hostId,
   setHostId,
+  sessionPassword,
+  setSessionPassword,
   status,
   connecting,
   connected,
@@ -67,12 +71,21 @@ export const ClientPanel: React.FC<ClientPanelProps> = ({
       <div className="toolbar">
         <input
           type="text"
-          placeholder="Enter Host ID"
+          placeholder="Enter Connection ID"
           value={hostId}
           disabled={connecting || connected}
           onChange={(e) => setHostId(e.target.value.replace(/\D/g, "").slice(0, 8))}
         />
-        <button type="button" disabled={connecting || connected || !hostId.trim()} onClick={onConnect}>
+        <input
+          type="password"
+          placeholder="Enter Password"
+          value={sessionPassword}
+          inputMode="numeric"
+          maxLength={6}
+          disabled={connecting || connected}
+          onChange={(e) => setSessionPassword(e.target.value.replace(/\D/g, "").slice(0, 6))}
+        />
+        <button type="button" disabled={connecting || connected || !hostId.trim() || sessionPassword.trim().length !== 6} onClick={onConnect}>
           Connect
         </button>
         <button type="button" className="secondary" disabled={!connected && !connecting} onClick={onDisconnect}>
@@ -111,7 +124,7 @@ export const ClientPanel: React.FC<ClientPanelProps> = ({
           <div className="capture-layer" style={{ cursor: cursorStyle }} />
           {!connected && (
             <div className="hint">
-              {connecting ? "Handshaking with remote host..." : "Enter a 6-digit Host ID to start a remote control session."}
+              {connecting ? "Handshaking with remote host..." : "Enter the connection ID and password to start a remote control session."}
             </div>
           )}
         </div>
