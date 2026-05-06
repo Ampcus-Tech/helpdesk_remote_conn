@@ -11,6 +11,7 @@ import HostPanel from "./components/HostPanel";
 import ClientPanel from "./components/ClientPanel";
 import ChatPanel from "./components/ChatPanel";
 import LandingScreen from "./components/LandingScreen";
+import AgentLoginPanel from "./components/AgentLoginPanel";
 
 const MOUSE_MOVE_INTERVAL_MS = 1000 / 60;
 const DC_BUFFER_CAP = 24 * 1024;
@@ -48,6 +49,7 @@ function normalizeDialogPath(path: string): string {
 }
 
 export default function App() {
+  const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "http://localhost:8080").replace(/\/+$/, "");
   const [mode, setMode] = useState<SessionMode>("idle");
   const [hostId, setHostId] = useState("");
   const [sessionPassword, setSessionPassword] = useState("");
@@ -59,6 +61,10 @@ export default function App() {
   const [fileProgress, setFileProgress] = useState<{ name: string; progress: number; total: number; direction: "send" | "recv" } | null>(null);
   const [cursorName, setCursorName] = useState("arrow");
   const [remoteOS, setRemoteOS] = useState<string | null>(null);
+  const [isAgentAuthenticated, setIsAgentAuthenticated] = useState(false);
+  const [agentUsername, setAgentUsername] = useState("");
+  const [agentPassword, setAgentPassword] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
   const swapModifiers = useMemo(() => {
     const localIsMac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
     const remoteIsMac = remoteOS === "Darwin";
@@ -90,6 +96,45 @@ export default function App() {
     pressedKeys.current.clear();
   }, []);
 
+  const loginAgent = useCallback(async () => {
+    if (!agentUsername.trim() || !agentPassword.trim()) {
+      setStatus("Please enter username and password");
+      return;
+    }
+    setLoggingIn(true);
+    setStatus("Authenticating agent...");
+    try {
+      const resp = await fetch(`${BACKEND_URL}/api/auth/agent/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: agentUsername.trim(),
+          password: agentPassword
+        }),
+      });
+
+      if (!resp.ok) {
+        const errorData = await resp.json().catch(() => null);
+        console.error("Login failed response:", errorData);
+        const errorMessage = errorData?.message || errorData?.error || `Login failed (${resp.status})`;
+        throw new Error(errorMessage);
+      }
+
+      const data = await resp.json();
+      console.log("Login successful:", data);
+      localStorage.setItem("agent_auth_token", data.token || "");
+      localStorage.setItem("agent_refresh_token", data.refreshToken || "");
+      localStorage.setItem("agent_username", data.username || agentUsername.trim());
+      setIsAgentAuthenticated(true);
+      setStatus("Agent authorized. Enter host connection details.");
+    } catch (error) {
+      setIsAgentAuthenticated(false);
+      setStatus(error instanceof Error ? error.message : "Agent login failed");
+    } finally {
+      setLoggingIn(false);
+    }
+  }, [BACKEND_URL, agentUsername, agentPassword]);
+
   const disconnect = useCallback(async () => {
     releaseAllKeys();
     setHostWarning(null);
@@ -113,6 +158,8 @@ export default function App() {
     setConnecting(false);
     setStatus("Disconnected");
     setMode("idle");
+    setIsAgentAuthenticated(false);
+    setAgentPassword("");
     setFileProgress(null);
   }, [mode, releaseAllKeys]);
 
@@ -172,6 +219,10 @@ export default function App() {
   };
 
   const startClient = async () => {
+    if (!isAgentAuthenticated) {
+      setStatus("Please login as agent first.");
+      return;
+    }
     const id = hostId.trim();
     const pwd = sessionPassword.trim();
     if (!id) {
@@ -199,6 +250,16 @@ export default function App() {
       };
     }
   };
+
+  const chooseClientMode = useCallback(async () => {
+    setMode("client");
+    setConnected(false);
+    setConnecting(false);
+    setHostId("");
+    setSessionPassword("");
+    setIsAgentAuthenticated(false);
+    setStatus("Please login as agent");
+  }, []);
 
   const sendChatNow = (text: string) => {
     if (connected) {
@@ -472,7 +533,7 @@ export default function App() {
   return (
     <div className="layout">
       {mode === "idle" ? (
-        <LandingScreen onSetMode={setMode} onStartHost={startHost} />
+        <LandingScreen onStartHost={startHost} onStartClientMode={chooseClientMode} />
       ) : (
         <div style={{ flex: 1, position: 'relative', display: 'flex' }}>
           <button
@@ -493,6 +554,16 @@ export default function App() {
               chatOpen={chatOpen}
               onToggleChat={() => setChatOpen(!chatOpen)}
               warning={hostWarning}
+            />
+          ) : !isAgentAuthenticated ? (
+            <AgentLoginPanel
+              username={agentUsername}
+              password={agentPassword}
+              status={status}
+              loggingIn={loggingIn}
+              onUsernameChange={setAgentUsername}
+              onPasswordChange={setAgentPassword}
+              onLogin={loginAgent}
             />
           ) : (
             <ClientPanel

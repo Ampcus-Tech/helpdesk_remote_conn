@@ -1,18 +1,17 @@
 import logo from "../assets/ApmcusLogo.png"
-import { SessionMode } from "../services/sessionManager";
 
 interface LandingScreenProps {
-  onSetMode: (mode: SessionMode) => void;
   onStartHost: () => void;
+  onStartClientMode: () => void;
 }
 
-export default function LandingScreen({ onSetMode, onStartHost }: LandingScreenProps) {
+export default function LandingScreen({ onStartHost, onStartClientMode }: LandingScreenProps) {
   return (
     <div className="landing-screen" style={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
       <img src={logo} alt="Logo" style={{ width: '150px', height: '150px', marginBottom: '30px', filter: 'drop-shadow(0 10px 15px rgba(0,0,0,0.1))', borderRadius: '24px' }} />
       <h1 style={{ marginBottom: '40px' }}>Remote Helpdesk</h1>
       <div style={{ display: 'flex', gap: '20px' }}>
-        <button style={{ padding: '20px 40px', fontSize: '18px' }} onClick={() => onSetMode("client")}>
+        <button style={{ padding: '20px 40px', fontSize: '18px' }} onClick={onStartClientMode}>
           Client Mode
         </button>
         <button className="secondary" style={{ padding: '20px 40px', fontSize: '18px' }} onClick={onStartHost}>

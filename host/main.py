@@ -8,7 +8,9 @@ import sys
 import os
 import signal
 import uuid
+import logging
 from multiprocessing import Queue
+import aiohttp
 
 # Ensure repo root is importable regardless of launcher working directory.
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -25,12 +27,35 @@ from common.config import setup_logging
 from host.webrtc_host import WebRTCHost
 
 PBKDF2_ITERATIONS = 200_000
+BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "https://localhost:8080").rstrip("/")
+DEVICE_SECRET_DIR = os.path.join(os.path.expanduser("~"), ".helpdesk_remote")
+DEVICE_SECRET_PATH = os.path.join(DEVICE_SECRET_DIR, "device_secret.key")
+logger = logging.getLogger("host")
+
+
+def _get_or_create_device_secret() -> str:
+    os.makedirs(DEVICE_SECRET_DIR, exist_ok=True)
+    if os.path.exists(DEVICE_SECRET_PATH):
+        with open(DEVICE_SECRET_PATH, "r", encoding="utf-8") as f:
+            return f.read().strip()
+
+    device_secret = secrets.token_hex(32)
+    with open(DEVICE_SECRET_PATH, "w", encoding="utf-8") as f:
+        f.write(device_secret)
+    try:
+        os.chmod(DEVICE_SECRET_PATH, 0o600)
+    except Exception:
+        # chmod is best-effort and may not apply on Windows.
+        pass
+    return device_secret
 
 def _hardware_fingerprint() -> str:
     mac_addr = hex(uuid.getnode())
     cpu = platform.processor() or "unknown-cpu"
     hostname = socket.gethostname() or "unknown-host"
-    return f"{mac_addr}|{cpu}|{hostname}"
+    os_name = platform.system() or "unknown-os"
+    device_secret = _get_or_create_device_secret()
+    return f"{mac_addr}|{cpu}|{hostname}|{os_name}|{device_secret}"
 
 def generate_hidden_host_id() -> str:
     return hashlib.sha256(_hardware_fingerprint().encode("utf-8")).hexdigest()
@@ -48,6 +73,30 @@ def hash_password(password: str):
     salt = secrets.token_bytes(16)
     password_hash = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF2_ITERATIONS)
     return password_hash.hex(), salt.hex()
+
+
+def sha256_hex(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+async def sync_host_session_to_backend(host_id: str, device_name: str, connection_id: str, session_password: str):
+    register_payload = {"hostId": host_id, "deviceName": device_name}
+    start_session_payload = {
+        "hostId": host_id,
+        "connectionId": connection_id,
+        "sessionPasswordHash": sha256_hex(session_password),
+    }
+    timeout = aiohttp.ClientTimeout(total=10)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(f"{BACKEND_BASE_URL}/api/remote/register-host", json=register_payload) as response:
+            if response.status >= 400:
+                text = await response.text()
+                raise RuntimeError(f"register-host failed ({response.status}): {text}")
+
+        async with session.post(f"{BACKEND_BASE_URL}/api/remote/start-session", json=start_session_payload) as response:
+            if response.status >= 400:
+                text = await response.text()
+                raise RuntimeError(f"start-session failed ({response.status}): {text}")
 
 async def read_commands(host: WebRTCHost):
     """Read commands from stdin and put them into the host's command_queue."""
@@ -70,9 +119,21 @@ async def read_commands(host: WebRTCHost):
 async def main():
     setup_logging()
     hidden_host_id = generate_hidden_host_id()
+    device_name = socket.gethostname() or platform.node() or "unknown-device"
     connection_id = derive_public_connection_id(hidden_host_id)
     session_password = generate_session_password()
     password_hash, password_salt = hash_password(session_password)
+    try:
+        await sync_host_session_to_backend(
+            host_id=hidden_host_id,
+            device_name=device_name,
+            connection_id=connection_id,
+            session_password=session_password,
+        )
+        print("UI_SIGNAL:STATUS:Host session synced to backend", flush=True)
+    except Exception as e:
+        logger.exception("Failed to sync host session to backend")
+        print(f"UI_SIGNAL:STATUS:Backend sync failed: {e}", flush=True)
     print("=========================================")
     print(f"Connection ID to connect: {connection_id}")
     print(f"Password: {session_password}")

@@ -281,7 +281,7 @@ export async function sendFile(fileChannel: RTCDataChannel, file: File, onProgre
  * Start viewer session: WebSocket signaling + WebRTC (matches Python `client/webrtc_client.py` flow).
  */
 export async function startSession(connectionId: string, password: string, handlers: SessionHandlers): Promise<ActiveSession> {
-  const signalingUrl = import.meta.env.VITE_SIGNALING_URL || "ws://127.0.0.1:8080";
+  const signalingUrl = import.meta.env.VITE_SIGNALING_URL || "ws://127.0.0.1:8081";
   handlers.onStatus(`Signaling: ${signalingUrl}`);
  
   const ws = await new Promise<WebSocket>((resolve, reject) => {

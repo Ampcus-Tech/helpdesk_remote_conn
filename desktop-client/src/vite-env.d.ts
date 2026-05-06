@@ -2,7 +2,8 @@
 
 interface ImportMetaEnv {
   readonly VITE_SIGNALING_URL: string;
-  readonly VITE_ICE_SERVERS_JSON: string;
+  readonly VITE_ICE_SERVERS_JSON?: string;
+  readonly VITE_BACKEND_URL?: string;
 }
 
 interface ImportMeta {
