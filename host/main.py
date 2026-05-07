@@ -8,7 +8,9 @@ import sys
 import os
 import signal
 import uuid
+import datetime
 import logging
+from contextlib import suppress
 from multiprocessing import Queue
 import aiohttp
 
@@ -27,10 +29,12 @@ from common.config import setup_logging
 from host.webrtc_host import WebRTCHost
 
 PBKDF2_ITERATIONS = 200_000
-BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "https://localhost:8080").rstrip("/")
+BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://localhost:8080").rstrip("/")
+AUDIT_API_URL = os.getenv("AUDIT_API_URL", f"{BACKEND_BASE_URL}/api/audit/log")
 DEVICE_SECRET_DIR = os.path.join(os.path.expanduser("~"), ".helpdesk_remote")
 DEVICE_SECRET_PATH = os.path.join(DEVICE_SECRET_DIR, "device_secret.key")
 logger = logging.getLogger("host")
+log_queue: asyncio.Queue[dict] = asyncio.Queue()
 
 
 def _get_or_create_device_secret() -> str:
@@ -75,6 +79,55 @@ def hash_password(password: str):
     return password_hash.hex(), salt.hex()
 
 
+def _local_ip() -> str:
+    try:
+        return socket.gethostbyname(socket.gethostname())
+    except Exception:
+        return "127.0.0.1"
+
+
+def _build_audit_event(event: str, session_id: str, host_id: str, metadata: dict | None = None) -> dict:
+    return {
+        "event": event,
+        "sessionId": session_id,
+        "hostId": host_id,
+        "clientIp": _local_ip(),
+        "timestamp": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "metadata": metadata or {}
+    }
+
+
+async def enqueue_audit_event(event: dict):
+    try:
+        await log_queue.put(event)
+    except Exception:
+        logger.exception("Failed to enqueue audit event")
+
+
+async def audit_worker():
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        while True:
+            event = await log_queue.get()
+            try:
+                for attempt in range(1, 4):
+                    try:
+                        async with session.post(AUDIT_API_URL, json=event) as response:
+                            text = await response.text()
+                            if 200 <= response.status < 300:
+                                break
+                            logger.warning("Audit log failed [%s] %s: %s", response.status, AUDIT_API_URL, text)
+                    except Exception:
+                        logger.exception("Audit log request failed on attempt %s", attempt)
+                        if attempt < 3:
+                            await asyncio.sleep(1)
+                            continue
+                    else:
+                        break
+            finally:
+                log_queue.task_done()
+
+
 def sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -97,6 +150,13 @@ async def sync_host_session_to_backend(host_id: str, device_name: str, connectio
             if response.status >= 400:
                 text = await response.text()
                 raise RuntimeError(f"start-session failed ({response.status}): {text}")
+
+        await enqueue_audit_event(_build_audit_event(
+            "SESSION_STARTED",
+            connection_id,
+            host_id,
+            {"deviceName": device_name}
+        ))
 
 async def read_commands(host: WebRTCHost):
     """Read commands from stdin and put them into the host's command_queue."""
@@ -143,22 +203,61 @@ async def main():
     
     def on_event(msg):
         print(f"UI_SIGNAL:STATUS:{msg}", flush=True)
+        asyncio.create_task(enqueue_audit_event(_build_audit_event(
+            msg,
+            connection_id,
+            hidden_host_id,
+            {"status": msg}
+        )))
 
     def on_chat(sender, text):
         json_data = json.dumps({"sender": sender, "text": text})
         print(f"UI_SIGNAL:CHAT_RECEIVED:{json_data}", flush=True)
+        asyncio.create_task(enqueue_audit_event(_build_audit_event(
+            "CHAT_MESSAGE",
+            connection_id,
+            hidden_host_id,
+            {"sender": sender, "message": text}
+        )))
 
     def on_file_offer(file_id, name, size):
         json_data = json.dumps({"file_id": file_id, "name": name, "size": size})
         print(f"UI_SIGNAL:FILE_OFFER:{json_data}", flush=True)
+        asyncio.create_task(enqueue_audit_event(_build_audit_event(
+            "FILE_TRANSFER_OFFER",
+            connection_id,
+            hidden_host_id,
+            {"fileName": name, "size": size, "fileId": file_id}
+        )))
 
     def on_file_progress(name, progress, total, direction):
         json_data = json.dumps({"name": name, "progress": progress, "total": total, "direction": direction})
         print(f"UI_SIGNAL:FILE_PROGRESS:{json_data}", flush=True)
+        asyncio.create_task(enqueue_audit_event(_build_audit_event(
+            "FILE_TRANSFER_PROGRESS",
+            connection_id,
+            hidden_host_id,
+            {"fileName": name, "progress": progress, "total": total, "direction": direction}
+        )))
 
-    def on_file_done(name, path, direction):
-        json_data = json.dumps({"name": name, "path": path, "direction": direction})
+    def on_file_done(name, path, direction, size=None):
+        json_data = json.dumps({"name": name, "path": path, "direction": direction, "size": size})
         print(f"UI_SIGNAL:FILE_DONE:{json_data}", flush=True)
+        asyncio.create_task(enqueue_audit_event(_build_audit_event(
+            "FILE_TRANSFER_COMPLETED",
+            connection_id,
+            hidden_host_id,
+            {"fileName": name, "path": path, "direction": direction, "size": size}
+        )))
+
+    def on_connected():
+        print("UI_SIGNAL:STATUS:SESSION_CONNECTED", flush=True)
+        asyncio.create_task(enqueue_audit_event(_build_audit_event(
+            "SESSION_CONNECTED",
+            connection_id,
+            hidden_host_id,
+            None
+        )))
 
     host = WebRTCHost(
         hidden_host_id,
@@ -169,7 +268,8 @@ async def main():
         on_chat=on_chat,
         on_file_offer=on_file_offer,
         on_file_progress=on_file_progress,
-        on_file_done=on_file_done
+        on_file_done=on_file_done,
+        on_connected=on_connected
     )
 
     # Handle termination signals
@@ -181,7 +281,8 @@ async def main():
             # add_signal_handler is not implemented on Windows
             pass
 
-    # Run the command listener and the host concurrently
+    # Run the command listener, host, and audit worker concurrently
+    audit_task = asyncio.create_task(audit_worker())
     try:
         await asyncio.gather(
             host.run(),
@@ -191,6 +292,10 @@ async def main():
         print("Host tasks cancelled", flush=True)
     finally:
         await host.stop()
+        await log_queue.join()
+        audit_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await audit_task
 
 if __name__ == "__main__":
     try:

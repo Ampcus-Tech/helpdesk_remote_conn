@@ -363,8 +363,41 @@ fn save_received_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
     } else {
         path.clone()
     };
- 
-    fs::write(&normalized, bytes)
+
+    let path_buf = std::path::PathBuf::from(&normalized);
+
+    let home_dir = std::env::var_os(if cfg!(target_os = "windows") { "USERPROFILE" } else { "HOME" })
+        .ok_or_else(|| "Unable to determine home directory".to_string())?;
+    let home_path = std::path::PathBuf::from(home_dir);
+    let allowed_paths = [
+        home_path.clone(),
+        home_path.join("Downloads"),
+        home_path.join("Documents"),
+        home_path.join("Desktop"),
+    ];
+
+    let parent_dir = path_buf
+        .parent()
+        .ok_or_else(|| format!("Invalid file path: {}", normalized))?;
+    let canonical_parent = parent_dir
+        .canonicalize()
+        .map_err(|e| format!("Unable to verify path {}: {}", parent_dir.display(), e))?;
+
+    let allowed = allowed_paths.iter().any(|allowed| {
+        allowed
+            .canonicalize()
+            .map(|root| canonical_parent.starts_with(root))
+            .unwrap_or(false)
+    });
+
+    if !allowed {
+        return Err(format!("Save path is not allowed: {}", normalized));
+    }
+
+    fs::create_dir_all(parent_dir)
+        .map_err(|e| format!("Failed to create directory {}: {}", parent_dir.display(), e))?;
+
+    fs::write(&path_buf, bytes)
         .map_err(|e| format!("Failed to save file to {}: {}", normalized, e))
 }
  

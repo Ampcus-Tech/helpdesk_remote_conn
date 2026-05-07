@@ -17,7 +17,7 @@ export type SessionHandlers = {
   onChatText: (sender: "Host" | "You" | "SYSTEM", text: string) => void;
   onFileOffer: (fileId: string, fileName: string, fileSize: number) => void;
   onFileProgress: (fileName: string, transferred: number, total: number, direction: "send" | "recv") => void;
-  onFileDone: (fileName: string, path: string, direction: "send" | "recv") => void;
+  onFileDone: (fileName: string, path: string, direction: "send" | "recv", size?: number) => void;
   onDataChannelsReady: (ch: DataChannels) => void;
   onSessionEnd: (reason: string) => void;
 };
@@ -32,7 +32,29 @@ export type ActiveSession = {
 const CTRL = "control";
 const CHAT = "chat";
 const FILE = "file";
- 
+
+const MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024; // 100 MB
+const MAX_FILE_NAME_LENGTH = 255;
+const FILE_NAME_PATTERN = /^[a-zA-Z0-9_.\- ]+$/;
+
+function isValidFileName(fileName: string): boolean {
+  if (!fileName || typeof fileName !== "string") return false;
+  if (fileName.length > MAX_FILE_NAME_LENGTH) return false;
+  if (fileName.includes("/") || fileName.includes("\\") || fileName.includes("..")) return false;
+  return FILE_NAME_PATTERN.test(fileName);
+}
+
+function isAllowedFileSize(fileSize: number): boolean {
+  return typeof fileSize === "number" && fileSize > 0 && fileSize <= MAX_FILE_SIZE_BYTES;
+}
+
+function formatFileSize(size: number): string {
+  if (!isFinite(size)) return `${size} bytes`;
+  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${size} bytes`;
+}
+
 // Internal state for file transfers
 let incomingFiles: Record<string, {
   name: string;
@@ -112,11 +134,22 @@ export async function sendFile(fileChannel: RTCDataChannel, file: File, onProgre
     return false;
   }
 
+  const fileName = file.name;
+  const fileSize = file.size;
+
+  if (!isValidFileName(fileName)) {
+    console.error("Invalid file name denied:", fileName);
+    return false;
+  }
+
+  if (!isAllowedFileSize(fileSize)) {
+    console.error("File size exceeds allowed maximum:", fileSize);
+    return false;
+  }
+
   const randomBytes = new Uint8Array(16);
   crypto.getRandomValues(randomBytes);
   const fileId = Array.from(randomBytes, (b) => b.toString(16).padStart(2, "0")).join("");
-  const fileName = file.name;
-  const fileSize = file.size;
   
   console.log(`Sending file: ${fileName} (${fileSize} bytes)`);
 
@@ -321,7 +354,10 @@ export async function startSession(connectionId: string, password: string, handl
   };
   file.onclose = () => {
     fileReady = false;
-    handlers.onSessionEnd("file channel closed");
+    console.warn("File channel closed");
+    handlers.onStatus("File data channel closed");
+    // Do not terminate the full session on file channel closure alone.
+    // The session may still be active via the control/chat channels.
   };
  
   ctrl.onopen = () => {
@@ -368,7 +404,22 @@ export async function startSession(connectionId: string, password: string, handl
       const msgType = payload.type;
  
       if (msgType === MessageType.FILE_OFFER) {
-        handlers.onFileOffer(payload.file_id, payload.file_name, payload.file_size);
+        const fileId = payload.file_id;
+        const fileName = payload.file_name;
+        const fileSize = Number(payload.file_size ?? 0);
+
+        if (!isValidFileName(fileName) || !isAllowedFileSize(fileSize)) {
+          console.warn("Auto rejecting unsafe file offer", fileName, fileSize);
+          file.send(JSON.stringify({
+            type: MessageType.FILE_ACCEPT,
+            file_id: fileId,
+            accepted: false
+          }));
+          handlers.onStatus(`Rejected unsafe file offer: ${fileName}`);
+          return;
+        }
+
+        handlers.onFileOffer(fileId, fileName, fileSize);
       } else if (msgType === MessageType.FILE_ACCEPT) {
         const resolve = pendingOutgoingAccept[payload.file_id];
         if (resolve) {
@@ -376,9 +427,15 @@ export async function startSession(connectionId: string, password: string, handl
           resolve(payload.accepted);
         }
       } else if (msgType === MessageType.FILE_START) {
+        const fileSize = Number(payload.file_size ?? 0);
+        if (!isValidFileName(payload.file_name) || !isAllowedFileSize(fileSize)) {
+          console.error("Rejecting invalid incoming file transfer start", payload.file_name, fileSize);
+          return;
+        }
+
         incomingFiles[payload.file_id] = {
           name: payload.file_name,
-          size: payload.file_size,
+          size: fileSize,
           received: 0,
           path: incomingSavePaths[payload.file_id] || "",
           chunks: []
@@ -386,15 +443,21 @@ export async function startSession(connectionId: string, password: string, handl
       } else if (msgType === MessageType.FILE_CHUNK) {
         const f = incomingFiles[payload.file_id];
         if (f) {
+          const decoded = atob(payload.chunk_b64);
           f.chunks.push(payload.chunk_b64);
-          f.received += Math.floor((payload.chunk_b64.length * 3) / 4); // basic estimate
+          f.received += decoded.length;
+          if (f.received > f.size) {
+            console.error("Incoming file data exceeds expected size", f.name, f.received, f.size);
+            delete incomingFiles[payload.file_id];
+            delete incomingSavePaths[payload.file_id];
+            handlers.onStatus(`Invalid file transfer from ${f.name}; transfer aborted.`);
+            return;
+          }
           handlers.onFileProgress(f.name, f.received, f.size, "recv");
         }
       } else if (msgType === MessageType.FILE_END) {
         const f = incomingFiles[payload.file_id];
         if (f) {
-          // Decode all base64 chunks into a single byte array and save to the path
-          // chosen by the client when accepting the file offer.
           const decodedChunks = f.chunks.map((b64) => {
             const bin = atob(b64);
             const arr = new Uint8Array(bin.length);
@@ -402,6 +465,15 @@ export async function startSession(connectionId: string, password: string, handl
             return arr;
           });
           const totalSize = decodedChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+
+          if (totalSize !== f.size) {
+            console.error("Received file size mismatch", f.name, totalSize, f.size);
+            handlers.onStatus(`File transfer failed: ${f.name} (incomplete)`);
+            delete incomingFiles[payload.file_id];
+            delete incomingSavePaths[payload.file_id];
+            return;
+          }
+
           const bytes = new Uint8Array(totalSize);
           let offset = 0;
           for (const chunk of decodedChunks) {
@@ -414,9 +486,8 @@ export async function startSession(connectionId: string, password: string, handl
               path: f.path,
               bytes: Array.from(bytes)
             });
-            handlers.onFileDone(f.name, f.path, "recv");
+            handlers.onFileDone(f.name, f.path, "recv", f.size);
           } else {
-            // Fallback if no explicit path was stored (should be rare).
             const blob = new Blob([bytes]);
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
@@ -424,7 +495,7 @@ export async function startSession(connectionId: string, password: string, handl
             a.download = f.name;
             a.click();
             URL.revokeObjectURL(url);
-            handlers.onFileDone(f.name, "Downloads", "recv");
+            handlers.onFileDone(f.name, "Downloads", "recv", f.size);
           }
 
           delete incomingSavePaths[payload.file_id];

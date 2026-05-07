@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { ActiveSession, startSession, sendChatLine, sendFile, respondFileOffer, setIncomingFileSavePath } from "../webrtc/session";
+import { auditService } from "./auditService";
  
 export type SessionMode = "idle" | "host" | "client";
  
@@ -25,7 +26,7 @@ export type SessionEvents = {
   onHostInfo: (os: string) => void;
   onFileOffer: (fileId: string, fileName: string, fileSize: number) => void;
   onFileProgress: (fileName: string, transferred: number, total: number, direction: "send" | "recv") => void;
-  onFileDone: (fileName: string, path: string, direction: "send" | "recv") => void;
+  onFileDone: (fileName: string, path: string, direction: "send" | "recv", size?: number) => void;
 };
  
 class SessionManager {
@@ -33,6 +34,8 @@ class SessionManager {
   private unlisteners: UnlistenFn[] = [];
   private events: Partial<SessionEvents> = {};
   private inputHelperPaused = false;
+  private currentSessionId: string | null = null;
+  private currentHostId: string | null = null;
  
   setEvents(events: SessionEvents) {
     this.events = events;
@@ -48,6 +51,8 @@ class SessionManager {
  
       if (line.includes("UI_SIGNAL:HOST_ID:")) {
         const id = line.split("UI_SIGNAL:HOST_ID:")[1].trim();
+        this.currentSessionId = id;
+        this.currentHostId = id;
         this.events.onHostIdGenerated?.(id);
       } else if (line.includes("UI_SIGNAL:SESSION_PASSWORD:")) {
         const password = line.split("UI_SIGNAL:SESSION_PASSWORD:")[1].trim();
@@ -63,26 +68,55 @@ class SessionManager {
         this.events.onStatusChange?.(status);
         if (status === "SESSION_CONNECTED") {
           this.events.onConnected?.();
+          if (this.currentSessionId && this.currentHostId) {
+            auditService.enqueueEvent("SESSION_CONNECTED", this.currentSessionId, this.currentHostId);
+          }
         }
       } else if (line.includes("UI_SIGNAL:CHAT_RECEIVED:")) {
         const data = JSON.parse(line.split("UI_SIGNAL:CHAT_RECEIVED:")[1].trim());
         this.events.onChatReceived?.(data.sender, data.text);
+        if (this.currentSessionId && this.currentHostId) {
+          auditService.enqueueEvent("CHAT_MESSAGE", this.currentSessionId, this.currentHostId, { sender: data.sender, message: data.text });
+        }
       } else if (line.includes("UI_SIGNAL:FILE_OFFER:")) {
         const data = JSON.parse(line.split("UI_SIGNAL:FILE_OFFER:")[1].trim());
         this.events.onFileOffer?.(data.file_id, data.name, data.size);
+        if (this.currentSessionId && this.currentHostId) {
+          auditService.enqueueEvent("FILE_OFFER", this.currentSessionId, this.currentHostId, {
+            fileName: data.name,
+            size: data.size,
+            direction: "recv",
+            status: "OFFERED"
+          });
+        }
       } else if (line.includes("UI_SIGNAL:FILE_PROGRESS:")) {
         const data = JSON.parse(line.split("UI_SIGNAL:FILE_PROGRESS:")[1].trim());
         this.events.onFileProgress?.(data.name, data.progress, data.total, data.direction);
       } else if (line.includes("UI_SIGNAL:FILE_DONE:")) {
         const data = JSON.parse(line.split("UI_SIGNAL:FILE_DONE:")[1].trim());
-        this.events.onFileDone?.(data.name, data.path, data.direction);
+        this.events.onFileDone?.(data.name, data.path, data.direction, data.size);
+        if (this.currentSessionId && this.currentHostId) {
+          auditService.enqueueEvent("FILE_TRANSFER_COMPLETED", this.currentSessionId, this.currentHostId, {
+            fileName: data.name,
+            size: data.size ?? null,
+            direction: data.direction,
+            status: "COMPLETED",
+            endTime: new Date().toISOString()
+          });
+        }
       } else if (line.includes("SESSION_CONNECTED")) {
         // Fallback for older host versions
         this.events.onStatusChange?.("Client connected");
         this.events.onConnected?.();
+        if (this.currentSessionId && this.currentHostId) {
+          auditService.enqueueEvent("SESSION_CONNECTED", this.currentSessionId, this.currentHostId);
+        }
       } else if (line.includes("SESSION_CHANNELS_CLOSED")) {
         this.events.onStatusChange?.("Client disconnected");
         this.events.onDisconnected?.("Client closed connection");
+        if (this.currentSessionId && this.currentHostId) {
+          auditService.enqueueEvent("SESSION_DISCONNECTED", this.currentSessionId, this.currentHostId);
+        }
       } else if (line.startsWith("Host registered")) {
         this.events.onStatusChange?.("Waiting for client...");
       } else {
@@ -122,7 +156,9 @@ class SessionManager {
  
   async startClient(connectionId: string, password: string) {
     this.events.onStatusChange?.("Connecting to host...");
- 
+    this.currentSessionId = connectionId;
+    this.currentHostId = "client";
+
     try {
       this.jsSession = await startSession(connectionId, password, {
         onStatus: (msg) => this.events.onStatusChange?.(msg),
@@ -130,25 +166,51 @@ class SessionManager {
         onControlOpen: () => { },
         onControlMessage: () => { },
         onCursorName: (name) => this.events.onCursorChange?.(name),
-        onChatText: (who, text) => this.events.onChatReceived?.(who, text),
+        onChatText: (who, text) => {
+          this.events.onChatReceived?.(who, text);
+          if (this.currentSessionId && this.currentHostId) {
+            auditService.enqueueEvent("CHAT_MESSAGE", this.currentSessionId, this.currentHostId, { sender: who, message: text });
+          }
+        },
         onHostInfo: (os) => {
           console.log("Remote Host OS:", os);
           this.events.onHostInfo?.(os);
         },
-        onFileOffer: (fileId, fileName, fileSize) => this.events.onFileOffer?.(fileId, fileName, fileSize),
+        onFileOffer: (fileId, fileName, fileSize) => {
+          this.events.onFileOffer?.(fileId, fileName, fileSize);
+          if (this.currentSessionId && this.currentHostId) {
+            auditService.enqueueEvent("FILE_OFFER", this.currentSessionId, this.currentHostId, { fileName, fileSize });
+          }
+        },
         onFileProgress: (fileName, transferred, total, direction) => this.events.onFileProgress?.(fileName, transferred, total, direction),
-        onFileDone: (fileName, path, direction) => this.events.onFileDone?.(fileName, path, direction),
+        onFileDone: (fileName, path, direction, size) => {
+          this.events.onFileDone?.(fileName, path, direction, size);
+          if (this.currentSessionId && this.currentHostId) {
+            auditService.enqueueEvent("FILE_TRANSFER_COMPLETED", this.currentSessionId, this.currentHostId, {
+              fileName,
+              size: size ?? null,
+              direction,
+              status: "COMPLETED",
+              endTime: new Date().toISOString()
+            });
+          }
+        },
         onDataChannelsReady: () => {
           this.events.onStatusChange?.("Connected to host");
           this.events.onConnected?.();
           // Start the global input helper when channels are ready
           void this.startInputHelper();
+          if (this.currentSessionId && this.currentHostId) {
+            auditService.enqueueEvent("SESSION_CONNECTED", this.currentSessionId, this.currentHostId);
+          }
         },
         onSessionEnd: (reason) => {
           void this.stopInputHelper();
           this.events.onDisconnected?.(reason);
-          this.cleanup();
-        },
+          if (this.currentSessionId && this.currentHostId) {
+            auditService.enqueueEvent("SESSION_DISCONNECTED", this.currentSessionId, this.currentHostId, { reason });
+          }
+        }
       });
     } catch (e: unknown) {
       this.events.onStatusChange?.(e instanceof Error ? e.message : String(e));
@@ -235,16 +297,31 @@ class SessionManager {
         cmd: JSON.stringify({ type: "send_chat", text })
       });
     }
+    if (this.currentSessionId && this.currentHostId) {
+      auditService.enqueueEvent("CHAT_MESSAGE", this.currentSessionId, this.currentHostId, { sender: "client", message: text });
+    }
   }
  
   async sendFile(file: File | string, onProgress: (p: number) => void) {
     if (this.jsSession?.channels.file && file instanceof File) {
-      return await sendFile(this.jsSession.channels.file, file, onProgress);
+      const result = await sendFile(this.jsSession.channels.file, file, onProgress);
+      if (this.currentSessionId && this.currentHostId) {
+        auditService.enqueueEvent("FILE_OFFER", this.currentSessionId, this.currentHostId, {
+          fileName: file.name,
+          size: file.size,
+          direction: "send",
+          status: "OFFERED"
+        });
+      }
+      return result;
     } else if (typeof file === "string") {
       // Host mode: send path to python
       await invoke("send_host_command", {
         cmd: JSON.stringify({ type: "send_file", path: file })
       });
+      if (this.currentSessionId && this.currentHostId) {
+        auditService.enqueueEvent("FILE_OFFER", this.currentSessionId, this.currentHostId, { fileName: file.split(/[/\\]/).pop() || file });
+      }
       return true;
     }
     return false;
@@ -260,6 +337,11 @@ class SessionManager {
       // Host mode: send to python stdin
       void invoke("send_host_command", {
         cmd: JSON.stringify({ type: "respond_file_offer", file_id: fileId, save_path: accepted ? (savePath || "received_file") : null })
+      });
+    }
+    if (this.currentSessionId && this.currentHostId) {
+      auditService.enqueueEvent(accepted ? "FILE_ACCEPTED" : "FILE_REJECTED", this.currentSessionId, this.currentHostId, {
+        fileId
       });
     }
   }

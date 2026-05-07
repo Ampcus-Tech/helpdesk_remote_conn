@@ -155,6 +155,41 @@ class WebRTCHost:
             # Never break the session due to UI callbacks.
             pass
 
+    @staticmethod
+    def _is_valid_file_name(name: str) -> bool:
+        if not name or not isinstance(name, str):
+            return False
+        if len(name) > 255:
+            return False
+        if any(part in name for part in ("/", "\\", "..")):
+            return False
+        return all(ch.isalnum() or ch in "._- " for ch in name)
+
+    @staticmethod
+    def _allowed_save_directories() -> list[str]:
+        home = os.path.expanduser("~")
+        return [
+            home,
+            os.path.join(home, "Downloads"),
+            os.path.join(home, "Documents"),
+            os.path.join(home, "Desktop"),
+        ]
+
+    @staticmethod
+    def _is_path_safe(path: str) -> bool:
+        try:
+            resolved = os.path.realpath(path)
+            for allowed in WebRTCHost._allowed_save_directories():
+                if os.path.commonpath([resolved, os.path.realpath(allowed)]) == os.path.realpath(allowed):
+                    return True
+            return False
+        except Exception:
+            return False
+
+    @staticmethod
+    def _is_file_size_allowed(size: int) -> bool:
+        return isinstance(size, int) and 0 < size <= 100 * 1024 * 1024
+
     async def create_pc(self):
         self.loop = asyncio.get_running_loop()
         # aiortc's VP8/H264 encoders take bitrate from module-level defaults.
@@ -263,10 +298,10 @@ class WebRTCHost:
             except Exception:
                 pass
 
-    def _emit_file_done(self, file_name: str, path: str, direction: str) -> None:
+    def _emit_file_done(self, file_name: str, path: str, direction: str, size: int | None = None) -> None:
         try:
             if self.on_file_done:
-                self.on_file_done(file_name, path, direction)
+                self.on_file_done(file_name, path, direction, size)
         except Exception:
             pass
 
@@ -342,6 +377,17 @@ class WebRTCHost:
                     file_id = payload["file_id"]
                     file_name = payload["file_name"]
                     file_size = int(payload["file_size"])
+
+                    if not self._is_valid_file_name(file_name) or not self._is_file_size_allowed(file_size):
+                        logger.warning("Rejecting unsafe incoming file offer: %s (%s)", file_name, file_size)
+                        if self.file_channel and self.file_channel.readyState == "open":
+                            self.file_channel.send(json.dumps({
+                                "type": MessageType.FILE_ACCEPT,
+                                "file_id": file_id,
+                                "accepted": False,
+                            }))
+                        continue
+
                     self._incoming_offers[file_id] = {"file_name": file_name, "file_size": file_size}
                     if self.on_file_offer:
                         self.on_file_offer(file_id, file_name, file_size)
@@ -356,10 +402,14 @@ class WebRTCHost:
                 elif msg_type == MessageType.FILE_START:
                     file_id = payload["file_id"]
                     target_path = self._incoming_targets.get(file_id)
-                    if not target_path:
+                    file_size = int(payload["file_size"])
+                    file_name = payload["file_name"]
+
+                    if not target_path or not self._is_valid_file_name(file_name) or not self._is_file_size_allowed(file_size) or not self._is_path_safe(target_path):
+                        logger.warning("Rejecting incoming file transfer start because of invalid metadata or path: %s", target_path)
                         self._file_msg_queue.task_done()
                         continue
-                        
+
                     def open_file():
                         os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
                         return open(target_path, "wb")
@@ -367,8 +417,8 @@ class WebRTCHost:
                     fh = await asyncio.to_thread(open_file)
                     self._incoming_files[file_id] = {
                         "fh": fh,
-                        "name": payload["file_name"],
-                        "size": int(payload["file_size"]),
+                        "name": file_name,
+                        "size": file_size,
                         "written": 0,
                         "path": target_path,
                     }
@@ -387,6 +437,15 @@ class WebRTCHost:
 
                     chunk_len = await asyncio.to_thread(process_chunk)
                     file_state["written"] += chunk_len
+                    if file_state["written"] > file_state["size"]:
+                        logger.error("Incoming file chunk causes size overflow for %s", file_state["name"])
+                        file_state["fh"].close()
+                        del self._incoming_files[file_id]
+                        self._incoming_targets.pop(file_id, None)
+                        self._incoming_offers.pop(file_id, None)
+                        self._emit("File transfer aborted due to size mismatch")
+                        self._file_msg_queue.task_done()
+                        continue
                     self._emit_file_progress(file_state["name"], file_state["written"], file_state["size"], "recv")
 
                 elif msg_type == MessageType.FILE_END:
@@ -402,7 +461,11 @@ class WebRTCHost:
                         file_state["fh"].close()
                         
                     await asyncio.to_thread(close_file)
-                    self._emit_file_done(file_state["name"], file_state["path"], "recv")
+                    if file_state["written"] != file_state["size"]:
+                        logger.error("File ended with mismatched size for %s: %s != %s", file_state["name"], file_state["written"], file_state["size"])
+                        self._emit("Received file transfer failed due to incomplete data")
+                    else:
+                        self._emit_file_done(file_state["name"], file_state["path"], "recv", file_state["size"])
                     
                 self._file_msg_queue.task_done()
             except asyncio.CancelledError:
@@ -422,10 +485,16 @@ class WebRTCHost:
             raise RuntimeError("File channel is not open")
         if not os.path.isfile(file_path):
             raise FileNotFoundError(file_path)
+        if not self._is_valid_file_name(os.path.basename(file_path)):
+            raise ValueError(f"Invalid file name: {file_path}")
+        if not self._is_path_safe(file_path):
+            raise ValueError(f"File path is not allowed: {file_path}")
 
         file_id = uuid.uuid4().hex
         file_name = os.path.basename(file_path)
         file_size = os.path.getsize(file_path)
+        if not self._is_file_size_allowed(file_size):
+            raise ValueError(f"File size exceeds allowed limit: {file_size}")
         chunk_size = 64 * 1024
 
         accept_event = asyncio.Event()
@@ -488,7 +557,7 @@ class WebRTCHost:
             await asyncio.to_thread(fh.close)
 
         self.file_channel.send(json.dumps({"type": MessageType.FILE_END, "file_id": file_id}))
-        self._emit_file_done(file_name, file_path, "send")
+        self._emit_file_done(file_name, file_path, "send", file_size)
 
     def send_file(self, file_path: str) -> None:
         if not self.loop or self.loop.is_closed():
@@ -502,7 +571,11 @@ class WebRTCHost:
         offer = self._incoming_offers.get(file_id)
         accepted = bool(save_path)
         if accepted and offer:
-            self._incoming_targets[file_id] = save_path
+            if not self._is_path_safe(save_path):
+                logger.warning("Rejecting file save path outside allowed directories: %s", save_path)
+                accepted = False
+            else:
+                self._incoming_targets[file_id] = save_path
         self.file_channel.send(json.dumps({
             "type": MessageType.FILE_ACCEPT,
             "file_id": file_id,

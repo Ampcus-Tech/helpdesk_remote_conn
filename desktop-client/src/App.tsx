@@ -48,6 +48,13 @@ function normalizeDialogPath(path: string): string {
   }
 }
 
+function formatFileSize(size: number): string {
+  if (!isFinite(size)) return `${size} bytes`;
+  if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${size} bytes`;
+}
+
 export default function App() {
   const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || "http://localhost:8080").replace(/\/+$/, "");
   const [mode, setMode] = useState<SessionMode>("idle");
@@ -195,7 +202,11 @@ export default function App() {
         const sender = mode === "host" ? "Client" : "Host";
         setChatLines((prev) => [
           ...prev,
-          { who: sender, text: `Incoming file offer.`, fileOffer: { id, name, size } },
+          {
+            who: sender,
+            text: `Incoming file offer: ${name} (${formatFileSize(size)})`,
+            fileOffer: { id, name, size }
+          },
         ]);
       },
       onFileProgress: (name, progress, total, direction) => {
@@ -205,9 +216,15 @@ export default function App() {
           setFileProgress({ name, progress, total, direction });
         }
       },
-      onFileDone: (name, _path, direction) => {
+      onFileDone: (name, _path, direction, size) => {
         setFileProgress(null);
-        setChatLines((prev) => [...prev, { who: "SYSTEM", text: `${direction === "send" ? "Sent" : "Received"} ${name} successfully.` }]);
+        setChatLines((prev) => [
+          ...prev,
+          {
+            who: "SYSTEM",
+            text: `${direction === "send" ? "Sent" : "Received"} ${name} successfully${typeof size === "number" ? ` (${formatFileSize(size)})` : ""}.`
+          }
+        ]);
       }
     });
   }, [disconnect, mode]);
@@ -275,9 +292,14 @@ export default function App() {
     if (mode === "client" && connected) {
       if (!file) return;
       setChatLines((prev) => [...prev, { who: "You", text: `Offering file: ${file.name}` }]);
-      await sessionManager.sendFile(file, (p) => {
+      const success = await sessionManager.sendFile(file, (p) => {
         setFileProgress({ name: file.name, progress: p, total: file.size, direction: "send" });
       });
+      if (!success) {
+        setStatus("File transfer failed or was not accepted.");
+        setChatLines((prev) => [...prev, { who: "SYSTEM", text: `File transfer failed: ${file.name}` }]);
+        setFileProgress(null);
+      }
     } else if (mode === "host" && connected) {
       // In host mode, we use Tauri to pick a file path
       // const { open } = await import("@tauri-apps/plugin-dialog");
@@ -286,8 +308,13 @@ export default function App() {
         directory: false,
       });
       if (path && typeof path === "string") {
-        setChatLines((prev) => [...prev, { who: "You", text: `Offering file: ${path.split(/[/\\]/).pop()}` }]);
-        await sessionManager.sendFile(path, () => { });
+        const fileName = path.split(/[/\\]/).pop() || path;
+        setChatLines((prev) => [...prev, { who: "You", text: `Offering file: ${fileName}` }]);
+        const success = await sessionManager.sendFile(path, () => { });
+        if (!success) {
+          setStatus(`File transfer failed: ${fileName}`);
+          setChatLines((prev) => [...prev, { who: "SYSTEM", text: `File transfer failed: ${fileName}` }]);
+        }
       }
     }
   };
